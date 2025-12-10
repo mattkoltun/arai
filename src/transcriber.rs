@@ -1,14 +1,17 @@
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
+use std::ptr;
+use std::sync::{Arc, Mutex, Once};
 
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
 };
 
 const DEFAULT_MODEL_PATH: &str = "models/ggml-small.en.bin";
-const STREAM_CHUNK_SAMPLES: usize = 16_000; // ~1 second of mono PCM at 16 kHz
+const TARGET_SAMPLE_RATE: usize = 16_000; // Hz
+const STREAM_CHUNK_SAMPLES: usize = TARGET_SAMPLE_RATE * 3; // ~3 seconds of mono PCM at 16 kHz
+static SILENCE_LOG: Once = Once::new();
 /// Transcribes audio chunks with a local Whisper model.
 pub struct Transcriber {
     ctx: WhisperContext,
@@ -45,6 +48,7 @@ impl Transcriber {
 
     /// Load the transcriber from a specific model path.
     pub fn new<P: AsRef<Path>>(model_path: P) -> Result<Self, TranscriberError> {
+        install_silent_log();
         let path_lossy = model_path.as_ref().to_string_lossy();
         WhisperContext::new_with_params(&path_lossy, WhisperContextParameters::default())
             .map(|ctx| Self { ctx })
@@ -92,15 +96,28 @@ impl Transcriber {
     /// Blocks until `input` is closed.
     pub fn transcribe_streaming(
         &self,
-        input: Receiver<Vec<i16>>,
+        input: Receiver<crate::recorder::AudioChunk>,
         output: Arc<Mutex<String>>,
     ) -> Result<(), TranscriberError> {
-        let mut window: Vec<i16> = Vec::new();
+        let mut resample_cursor: f32 = 0.0;
+        let mut mono_buffer: Vec<f32> = Vec::new();
         while let Ok(chunk) = input.recv() {
-            window.extend_from_slice(&chunk);
-            while window.len() >= STREAM_CHUNK_SAMPLES {
-                let chunk: Vec<i16> = window.drain(..STREAM_CHUNK_SAMPLES).collect();
-                let text = self.transcribe_pcm_i16(&chunk)?;
+            let mono = downmix_to_mono(&chunk.data, chunk.channels);
+            let step = (chunk.sample_rate as f32) / (TARGET_SAMPLE_RATE as f32);
+            if step <= 0.0 {
+                continue;
+            }
+
+            let mut idx = resample_cursor;
+            while (idx as usize) < mono.len() {
+                mono_buffer.push(mono[idx as usize]);
+                idx += step;
+            }
+            resample_cursor = idx - (mono.len() as f32);
+
+            while mono_buffer.len() >= STREAM_CHUNK_SAMPLES {
+                let chunk: Vec<f32> = mono_buffer.drain(..STREAM_CHUNK_SAMPLES).collect();
+                let text = self.transcribe_pcm_f32(&chunk)?;
                 if !text.trim().is_empty() {
                     let mut out = output.lock().map_err(|_| TranscriberError::OutputLock)?;
                     if !out.is_empty() && !out.ends_with(' ') {
@@ -128,7 +145,39 @@ fn collect_segments(state: &whisper_rs::WhisperState) -> Result<String, Transcri
 }
 
 fn default_params() -> FullParams<'static, 'static> {
-    FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_print_realtime(false);
+    params.set_print_progress(false);
+    params.set_print_timestamps(false);
+    params.set_print_special(false);
+    params
+}
+
+fn install_silent_log() {
+    SILENCE_LOG.call_once(|| unsafe {
+        whisper_rs::set_log_callback(Some(silent_log), ptr::null_mut());
+    });
+}
+
+unsafe extern "C" fn silent_log(
+    _level: std::os::raw::c_uint,
+    _text: *const std::os::raw::c_char,
+    _user_data: *mut std::os::raw::c_void,
+) {
+    // Suppress underlying whisper.cpp logs.
+}
+
+fn downmix_to_mono(data: &[i16], channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+    }
+    let mut mono = Vec::with_capacity(data.len() / channels as usize);
+    for frame in data.chunks(channels as usize) {
+        let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+        let avg = sum as f32 / channels as f32;
+        mono.push(avg / i16::MAX as f32);
+    }
+    mono
 }
 
 fn num_cpus() -> i32 {

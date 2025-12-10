@@ -13,7 +13,7 @@ fn main() {
     let transcriber =
         transcriber::Transcriber::from_default_model().expect("failed to load Whisper model");
 
-    let (audio_tx, audio_rx) = mpsc::channel::<Vec<i16>>();
+    let (audio_tx, audio_rx) = mpsc::channel::<recorder::AudioChunk>();
     let transcript = Arc::new(Mutex::new(String::new()));
 
     // Spawn transcriber to consume audio and append text into transcript buffer.
