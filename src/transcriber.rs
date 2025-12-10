@@ -1,11 +1,13 @@
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperError};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
+};
 
-const DEFAULT_MODEL_PATH: &str = "models/ggpl-small.en.bin";
+const DEFAULT_MODEL_PATH: &str = "models/ggml-small.en.bin";
 const STREAM_CHUNK_SAMPLES: usize = 16_000; // ~1 second of mono PCM at 16 kHz
 /// Transcribes audio chunks with a local Whisper model.
 pub struct Transcriber {
@@ -21,6 +23,20 @@ pub enum TranscriberError {
     OutputLock,
 }
 
+impl std::fmt::Display for TranscriberError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TranscriberError::ModelLoad(err) => write!(f, "failed to load model: {err}"),
+            TranscriberError::CreateState(err) => write!(f, "failed to create whisper state: {err}"),
+            TranscriberError::Run(err) => write!(f, "whisper run error: {err}"),
+            TranscriberError::Io(err) => write!(f, "io error: {err}"),
+            TranscriberError::OutputLock => write!(f, "output buffer lock poisoned"),
+        }
+    }
+}
+
+impl std::error::Error for TranscriberError {}
+
 impl Transcriber {
     /// Load the transcriber using the default bundled model path.
     pub fn from_default_model() -> Result<Self, TranscriberError> {
@@ -29,7 +45,10 @@ impl Transcriber {
 
     /// Load the transcriber from a specific model path.
     pub fn new<P: AsRef<Path>>(model_path: P) -> Result<Self, TranscriberError> {
-        WhisperContext::new(model_path).map(|ctx| Self { ctx }).map_err(TranscriberError::ModelLoad)
+        let path_lossy = model_path.as_ref().to_string_lossy();
+        WhisperContext::new_with_params(&path_lossy, WhisperContextParameters::default())
+            .map(|ctx| Self { ctx })
+            .map_err(TranscriberError::ModelLoad)
     }
 
     /// Transcribe 16-bit PCM samples; audio is expected to be mono at 16 kHz.
@@ -51,6 +70,7 @@ impl Transcriber {
     }
 
     /// Transcribe and write the text to an output stream (stdout, file, buffer, etc.).
+    #[allow(dead_code)]
     pub fn transcribe_to_writer<W: Write>(&self, audio: &[f32], mut writer: W) -> Result<(), TranscriberError> {
         let text = self.transcribe_pcm_f32(audio)?;
         writer.write_all(text.as_bytes()).map_err(TranscriberError::Io)?;
@@ -58,6 +78,7 @@ impl Transcriber {
     }
 
     /// Convenience wrapper for i16 PCM input that writes transcription to an output stream.
+    #[allow(dead_code)]
     pub fn transcribe_pcm_i16_to_writer<W: Write>(
         &self,
         audio: &[i16],
@@ -106,7 +127,7 @@ fn collect_segments(state: &whisper_rs::WhisperState) -> Result<String, Transcri
     Ok(output)
 }
 
-fn default_params() -> FullParams<'static> {
+fn default_params() -> FullParams<'static, 'static> {
     FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
 }
 
@@ -122,7 +143,7 @@ mod tests {
 
     #[test]
     fn default_path_exists_as_pathbuf() {
-        let path = PathBuf::from(DEFAULT_MODEL_PATH);
-        assert_eq!(path, PathBuf::from("models/ggpl-small.en.bin"));
+        let path = Path::new(DEFAULT_MODEL_PATH);
+        assert_eq!(path, Path::new("models/ggml-small.en.bin"));
     }
 }

@@ -1,5 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
+use std::fmt;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 
@@ -9,8 +10,8 @@ pub struct Recorder {
 }
 
 struct ActiveRecording {
-    stream: Stream,
-    sender: Sender<Vec<i16>>,
+    _stream: Stream,
+    _sender: Sender<Vec<i16>>,
 }
 
 #[derive(Debug)]
@@ -23,6 +24,22 @@ pub enum RecorderError {
     PlayStream(cpal::PlayStreamError),
     PoisonedLock,
 }
+
+impl fmt::Display for RecorderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RecorderError::AlreadyRecording => write!(f, "recording already in progress"),
+            RecorderError::NotRecording => write!(f, "no active recording to stop"),
+            RecorderError::NoInputDevice => write!(f, "no default input device available"),
+            RecorderError::StreamConfig(err) => write!(f, "input stream config error: {err}"),
+            RecorderError::BuildStream(err) => write!(f, "failed to build input stream: {err}"),
+            RecorderError::PlayStream(err) => write!(f, "failed to start input stream: {err}"),
+            RecorderError::PoisonedLock => write!(f, "recorder lock poisoned"),
+        }
+    }
+}
+
+impl std::error::Error for RecorderError {}
 
 impl Recorder {
     pub fn new() -> Self {
@@ -56,14 +73,15 @@ impl Recorder {
         }
 
         *inner = Some(ActiveRecording {
-            stream,
-            sender: sink,
+            _stream: stream,
+            _sender: sink,
         });
 
         Ok(())
     }
 
     /// Stop the active recording and release the stream.
+    #[allow(dead_code)]
     pub fn stop(&self) -> Result<(), RecorderError> {
         let mut inner = self.inner.lock().map_err(|_| RecorderError::PoisonedLock)?;
         let Some(active) = inner.take() else {
@@ -72,11 +90,9 @@ impl Recorder {
 
         // Dropping the stream stops callbacks; dropping the sender closes the channel.
         let ActiveRecording {
-            stream,
-            sender,
+            _stream,
+            _sender,
         } = active;
-        drop(stream);
-        drop(sender);
 
         Ok(())
     }
