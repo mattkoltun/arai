@@ -1,5 +1,4 @@
 use crate::controller::Controller;
-use eframe::egui::Vec2;
 use eframe::egui::{self, Key, TextEdit, TopBottomPanel};
 use once_cell::sync::OnceCell;
 use std::sync::mpsc::{self, Receiver, Sender};

@@ -1,4 +1,5 @@
-use crate::recorder::{AudioChunk, Recorder};
+use crate::messages::{AudioChunk, WorkerCommand};
+use crate::recorder::{Recorder};
 use crate::transcriber::{Transcriber, TranscriberError};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -15,6 +16,7 @@ pub struct Controller {
     audio_tx: Option<Sender<AudioChunk>>,
     transcriber_handle: Option<JoinHandle<()>>,
     state: ControllerState,
+    _worker_rx: Receiver<WorkerCommand>,
 }
 
 #[derive(Debug)]
@@ -28,12 +30,14 @@ pub enum ControllerError {
 
 impl Controller {
     pub fn new() -> Self {
+        let (_worker_tx, worker_rx) = mpsc::channel();
         Self {
             recorder: Recorder::new(),
             listening: false,
             audio_tx: None,
             transcriber_handle: None,
             state: ControllerState::Active,
+            _worker_rx: worker_rx,
         }
     }
 

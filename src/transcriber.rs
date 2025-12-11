@@ -95,7 +95,7 @@ impl Transcriber {
     /// Blocks until `input` is closed.
     pub fn transcribe_streaming(
         &self,
-        input: Receiver<crate::recorder::AudioChunk>,
+        input: Receiver<crate::messages::AudioChunk>,
         output: Sender<String>,
     ) -> Result<(), TranscriberError> {
         let mut resample_cursor: f32 = 0.0;

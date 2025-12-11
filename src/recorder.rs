@@ -1,16 +1,9 @@
+use crate::messages::AudioChunk;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Host, SampleFormat, Stream};
 use std::fmt;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
-
-/// Captured audio payload with metadata.
-#[derive(Clone)]
-pub struct AudioChunk {
-    pub sample_rate: u32,
-    pub channels: u16,
-    pub data: Vec<i16>,
-}
 
 #[derive(Debug)]
 pub enum RecorderError {
@@ -97,7 +90,7 @@ enum RecorderCommand {
 fn worker_loop(cmd_rx: Receiver<RecorderCommand>) {
     let host = cpal::default_host();
     let (cb_tx, cb_rx) = mpsc::channel::<AudioChunk>();
-    let mut stream: Option<Stream> = None;
+    let mut stream_handle: Option<Stream> = None;
     let mut sink: Option<Sender<AudioChunk>> = None;
     let mut listening = false;
 
@@ -111,7 +104,7 @@ fn worker_loop(cmd_rx: Receiver<RecorderCommand>) {
                 let result = create_stream(&host, cb_tx.clone());
                 match result {
                     Ok(new_stream) => {
-                        stream = Some(new_stream);
+                        stream_handle = Some(new_stream);
                         sink = Some(new_sink);
                         listening = true;
                         let _ = resp.send(Ok(()));
@@ -127,7 +120,9 @@ fn worker_loop(cmd_rx: Receiver<RecorderCommand>) {
                     continue;
                 }
                 // Stop stream and flush pending callbacks.
-                stream = None;
+                if let Some(stream) = stream_handle.take() {
+                    drop(stream);
+                }
                 if let Some(ref sink_ch) = sink {
                     for chunk in cb_rx.try_iter() {
                         let _ = sink_ch.send(chunk);
@@ -138,7 +133,9 @@ fn worker_loop(cmd_rx: Receiver<RecorderCommand>) {
                 let _ = resp.send(Ok(()));
             }
             RecorderCommand::Shutdown => {
-                stream = None;
+                if let Some(stream) = stream_handle.take() {
+                    drop(stream);
+                }
                 if let Some(ref sink_ch) = sink {
                     for chunk in cb_rx.try_iter() {
                         let _ = sink_ch.send(chunk);
