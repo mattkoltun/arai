@@ -2,6 +2,7 @@
 pub enum UiCommand {
     StartListening,
     StopListening,
+    ProcessText(String),
     Shutdown,
 }
 
