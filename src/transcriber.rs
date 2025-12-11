@@ -56,6 +56,7 @@ impl Transcriber {
     }
 
     /// Transcribe 16-bit PCM samples; audio is expected to be mono at 16 kHz.
+    #[allow(dead_code)]
     pub fn transcribe_pcm_i16(&self, audio: &[i16]) -> Result<String, TranscriberError> {
         let normalized: Vec<f32> = audio.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
         self.transcribe_pcm_f32(&normalized)
