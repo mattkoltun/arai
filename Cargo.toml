@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 cpal = "0.15"
 whisper-rs = "0.11"
+eframe = { version = "0.24", default-features = true }
+once_cell = "1.19"

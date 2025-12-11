@@ -1,18 +1,8 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, Stream};
+use cpal::{Host, SampleFormat, Stream};
 use std::fmt;
-use std::sync::mpsc::Sender;
-use std::sync::Mutex;
-
-/// Manages microphone recording backed by cpal.
-pub struct Recorder {
-    inner: Mutex<Option<ActiveRecording>>,
-}
-
-struct ActiveRecording {
-    _stream: Stream,
-    _sender: Sender<AudioChunk>,
-}
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread::{self, JoinHandle};
 
 /// Captured audio payload with metadata.
 #[derive(Clone)]
@@ -42,114 +32,171 @@ impl fmt::Display for RecorderError {
             RecorderError::StreamConfig(err) => write!(f, "input stream config error: {err}"),
             RecorderError::BuildStream(err) => write!(f, "failed to build input stream: {err}"),
             RecorderError::PlayStream(err) => write!(f, "failed to start input stream: {err}"),
-            RecorderError::PoisonedLock => write!(f, "recorder lock poisoned"),
+            RecorderError::PoisonedLock => write!(f, "recorder channel poisoned"),
         }
     }
 }
 
 impl std::error::Error for RecorderError {}
 
+/// Recorder runs a dedicated worker thread to manage the cpal stream and deliver audio chunks downstream.
+pub struct Recorder {
+    cmd_tx: Sender<RecorderCommand>,
+    handle: Option<JoinHandle<()>>,
+}
+
 impl Recorder {
     pub fn new() -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let handle = thread::spawn(move || worker_loop(cmd_rx));
         Self {
-            inner: Mutex::new(None),
+            cmd_tx,
+            handle: Some(handle),
         }
     }
 
     /// Start recording from the default input device, streaming chunks into the provided sender.
     pub fn start(&self, sink: Sender<AudioChunk>) -> Result<(), RecorderError> {
-        let mut inner = self.inner.lock().map_err(|_| RecorderError::PoisonedLock)?;
-        if inner.is_some() {
-            return Err(RecorderError::AlreadyRecording);
-        }
-
-        let host = cpal::default_host();
-        let device = host.default_input_device().ok_or(RecorderError::NoInputDevice)?;
-        let input_config = device
-            .default_input_config()
-            .map_err(RecorderError::StreamConfig)?;
-        let sample_format = input_config.sample_format();
-        let stream_config: cpal::StreamConfig = input_config.config();
-
-        let err_fn = |err| eprintln!("input stream error: {err}");
-        let stream_sender = sink.clone();
-        let stream = build_stream(
-            device,
-            &stream_config,
-            sample_format,
-            stream_sender,
-            err_fn,
-        )?;
-        if let Err(err) = stream.play() {
-            drop(stream);
-            drop(sink);
-            return Err(RecorderError::PlayStream(err));
-        }
-
-        *inner = Some(ActiveRecording {
-            _stream: stream,
-            _sender: sink,
-        });
-
-        Ok(())
+        let (resp_tx, resp_rx) = mpsc::channel();
+        self.cmd_tx
+            .send(RecorderCommand::Start { sink, resp: resp_tx })
+            .map_err(|_| RecorderError::PoisonedLock)?;
+        resp_rx.recv().unwrap_or(Err(RecorderError::PoisonedLock))
     }
 
-    /// Stop the active recording and release the stream.
-    #[allow(dead_code)]
+    /// Stop the active recording and flush pending buffers.
     pub fn stop(&self) -> Result<(), RecorderError> {
-        let mut inner = self.inner.lock().map_err(|_| RecorderError::PoisonedLock)?;
-        let Some(active) = inner.take() else {
-            return Err(RecorderError::NotRecording);
-        };
-
-        // Dropping the stream stops callbacks; dropping the sender closes the channel.
-        let ActiveRecording {
-            _stream,
-            _sender,
-        } = active;
-
-        Ok(())
+        let (resp_tx, resp_rx) = mpsc::channel();
+        self.cmd_tx
+            .send(RecorderCommand::Stop { resp: resp_tx })
+            .map_err(|_| RecorderError::PoisonedLock)?;
+        resp_rx.recv().unwrap_or(Err(RecorderError::PoisonedLock))
     }
 }
 
-fn build_stream(
-    device: cpal::Device,
-    config: &cpal::StreamConfig,
-    sample_format: SampleFormat,
-    sender: Sender<AudioChunk>,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<Stream, RecorderError> {
-    let sample_rate = config.sample_rate.0;
-    let channels = config.channels;
-    match sample_format {
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        let _ = self.cmd_tx.send(RecorderCommand::Shutdown);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+enum RecorderCommand {
+    Start {
+        sink: Sender<AudioChunk>,
+        resp: Sender<Result<(), RecorderError>>,
+    },
+    Stop {
+        resp: Sender<Result<(), RecorderError>>,
+    },
+    Shutdown,
+}
+
+fn worker_loop(cmd_rx: Receiver<RecorderCommand>) {
+    let host = cpal::default_host();
+    let (cb_tx, cb_rx) = mpsc::channel::<AudioChunk>();
+    let mut stream: Option<Stream> = None;
+    let mut sink: Option<Sender<AudioChunk>> = None;
+    let mut listening = false;
+
+    for cmd in cmd_rx {
+        match cmd {
+            RecorderCommand::Start { sink: new_sink, resp } => {
+                if listening {
+                    let _ = resp.send(Err(RecorderError::AlreadyRecording));
+                    continue;
+                }
+                let result = create_stream(&host, cb_tx.clone());
+                match result {
+                    Ok(new_stream) => {
+                        stream = Some(new_stream);
+                        sink = Some(new_sink);
+                        listening = true;
+                        let _ = resp.send(Ok(()));
+                    }
+                    Err(err) => {
+                        let _ = resp.send(Err(err));
+                    }
+                }
+            }
+            RecorderCommand::Stop { resp } => {
+                if !listening {
+                    let _ = resp.send(Err(RecorderError::NotRecording));
+                    continue;
+                }
+                // Stop stream and flush pending callbacks.
+                stream = None;
+                if let Some(ref sink_ch) = sink {
+                    for chunk in cb_rx.try_iter() {
+                        let _ = sink_ch.send(chunk);
+                    }
+                }
+                sink = None;
+                listening = false;
+                let _ = resp.send(Ok(()));
+            }
+            RecorderCommand::Shutdown => {
+                stream = None;
+                if let Some(ref sink_ch) = sink {
+                    for chunk in cb_rx.try_iter() {
+                        let _ = sink_ch.send(chunk);
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
+fn create_stream(host: &Host, cb_tx: Sender<AudioChunk>) -> Result<Stream, RecorderError> {
+    let device = host
+        .default_input_device()
+        .ok_or(RecorderError::NoInputDevice)?;
+    let input_config = device
+        .default_input_config()
+        .map_err(RecorderError::StreamConfig)?;
+    let sample_format = input_config.sample_format();
+    let stream_config: cpal::StreamConfig = input_config.config();
+    let sample_rate = stream_config.sample_rate.0;
+    let channels = stream_config.channels;
+
+    let err_fn = |err| eprintln!("input stream error: {err}");
+    let stream = match sample_format {
         SampleFormat::F32 => device
             .build_input_stream(
-                config,
-                move |data: &[f32], _| send_samples_f32(&sender, data, sample_rate, channels),
+                &stream_config,
+                move |data: &[f32], _| send_samples_f32(&cb_tx, data, sample_rate, channels),
                 err_fn,
                 None,
             )
-            .map_err(RecorderError::BuildStream),
+            .map_err(RecorderError::BuildStream)?,
         SampleFormat::I16 => device
             .build_input_stream(
-                config,
-                move |data: &[i16], _| send_samples_i16(&sender, data, sample_rate, channels),
+                &stream_config,
+                move |data: &[i16], _| send_samples_i16(&cb_tx, data, sample_rate, channels),
                 err_fn,
                 None,
             )
-            .map_err(RecorderError::BuildStream),
+            .map_err(RecorderError::BuildStream)?,
         SampleFormat::U16 => device
             .build_input_stream(
-                config,
-                move |data: &[u16], _| send_samples_u16(&sender, data, sample_rate, channels),
+                &stream_config,
+                move |data: &[u16], _| send_samples_u16(&cb_tx, data, sample_rate, channels),
                 err_fn,
                 None,
             )
-            .map_err(RecorderError::BuildStream),
-        _ => Err(RecorderError::BuildStream(
-            cpal::BuildStreamError::StreamConfigNotSupported,
-        )),
-    }
+            .map_err(RecorderError::BuildStream)?,
+        _ => {
+            return Err(RecorderError::BuildStream(
+                cpal::BuildStreamError::StreamConfigNotSupported,
+            ))
+        }
+    };
+
+    stream.play().map_err(RecorderError::PlayStream)?;
+    Ok(stream)
 }
 
 fn send_samples_i16(sender: &Sender<AudioChunk>, data: &[i16], sample_rate: u32, channels: u16) {

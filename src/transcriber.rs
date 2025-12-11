@@ -1,8 +1,8 @@
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::mpsc::Receiver;
 use std::ptr;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Once;
 
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
@@ -23,7 +23,6 @@ pub enum TranscriberError {
     CreateState(WhisperError),
     Run(WhisperError),
     Io(io::Error),
-    OutputLock,
 }
 
 impl std::fmt::Display for TranscriberError {
@@ -33,7 +32,6 @@ impl std::fmt::Display for TranscriberError {
             TranscriberError::CreateState(err) => write!(f, "failed to create whisper state: {err}"),
             TranscriberError::Run(err) => write!(f, "whisper run error: {err}"),
             TranscriberError::Io(err) => write!(f, "io error: {err}"),
-            TranscriberError::OutputLock => write!(f, "output buffer lock poisoned"),
         }
     }
 }
@@ -98,7 +96,7 @@ impl Transcriber {
     pub fn transcribe_streaming(
         &self,
         input: Receiver<crate::recorder::AudioChunk>,
-        output: Arc<Mutex<String>>,
+        output: Sender<String>,
     ) -> Result<(), TranscriberError> {
         let mut resample_cursor: f32 = 0.0;
         let mut mono_buffer: Vec<f32> = Vec::new();
@@ -120,11 +118,9 @@ impl Transcriber {
                 let chunk: Vec<f32> = mono_buffer.drain(..STREAM_CHUNK_SAMPLES).collect();
                 let text = self.transcribe_pcm_f32(&chunk)?;
                 if !text.trim().is_empty() {
-                    let mut out = output.lock().map_err(|_| TranscriberError::OutputLock)?;
-                    if !out.is_empty() && !out.ends_with(' ') {
-                        out.push(' ');
+                    if output.send(text.trim().to_owned()).is_err() {
+                        break;
                     }
-                    out.push_str(text.trim());
                 }
             }
         }
