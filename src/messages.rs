@@ -1,14 +1,5 @@
-#[derive(Debug)]
-pub enum UICommand {
-    StartRecording,
-    StopRecording,
-    Shutdown,
-    SubmitMessage(String),
-    ProcessMessage(String),
-}
-
-#[derive(Debug)]
-pub enum AppCommand {
+#[derive(Debug, Clone)]
+pub enum UiCommand {
     StartListening,
     StopListening,
     Shutdown,
@@ -19,5 +10,11 @@ pub enum AppCommand {
 pub struct AudioChunk {
     pub sample_rate: u32,
     pub channels: u16,
-    pub data: Vec<i16>,
+    pub samples: Vec<i16>,
+    pub is_final: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct TranscribedOutput {
+    pub text: String,
 }

@@ -1,25 +1,28 @@
+mod channels;
 mod controller;
 mod messages;
 mod recorder;
 mod transcriber;
 mod ui;
 
+use std::sync::mpsc;
+use std::thread;
+
 fn main() {
-    use std::sync::mpsc;
+    // Channels
+    let (audio_tx, audio_rx) = mpsc::channel::<messages::AudioChunk>();
+    let (ui_cmd_tx, ui_cmd_rx) = mpsc::channel::<messages::UiCommand>();
+    let (transcript_tx, transcript_rx) = mpsc::channel::<messages::TranscribedOutput>();
+    let (ui_update_tx, ui_update_rx) = mpsc::channel::<String>();
 
-    let controller = controller::Controller::new();
+    let recorder = recorder::Recorder::new(audio_tx.clone());
+    let transcriber = transcriber::Transcriber::new(audio_rx, transcript_tx);
+    let controller =
+        controller::Controller::new(recorder, transcriber, transcript_rx, ui_update_tx, ui_cmd_rx);
 
-    // Message channels
-    let (ui_tx, _ui_rx) = mpsc::channel::<messages::UICommand>();
-    let (worker_tx, _worker_rx) = mpsc::channel::<messages::AppCommand>();
-    let (audio_tx, _audio_rx) = mpsc::channel::<messages::AudioChunk>();
-    let (transcript_tx, _transcript_rx) = mpsc::channel::<String>();
-    let (text_tx, _text_rx) = mpsc::channel::<String>();
+    thread::spawn(move || controller.run());
 
-    // Keep senders alive (placeholders for now).
-    let _ = (ui_tx, worker_tx, audio_tx, transcript_tx, text_tx);
-
-    if let Err(err) = ui::run_chat_ui(controller) {
+    if let Err(err) = ui::run_chat_ui(ui_cmd_tx, ui_update_rx) {
         eprintln!("Failed to launch UI: {err}");
     }
 }

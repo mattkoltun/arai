@@ -1,38 +1,31 @@
-use crate::controller::Controller;
+use crate::messages::UiCommand;
 use eframe::egui::{self, Key, TextEdit, TopBottomPanel};
 use once_cell::sync::OnceCell;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 #[derive(Debug)]
-enum UiCommand {
+enum InternalUi {
     AppendInput(String),
-    AddMessage(String),
 }
 
-static UI_SENDER: OnceCell<Sender<UiCommand>> = OnceCell::new();
+static UI_SENDER: OnceCell<Sender<InternalUi>> = OnceCell::new();
 
-/// Public API: append text to the input box.
-pub fn append_input_text(text: impl Into<String>) -> Result<(), &'static str> {
-    UI_SENDER
-        .get()
-        .ok_or("UI not running")?
-        .send(UiCommand::AppendInput(text.into()))
-        .map_err(|_| "UI channel closed")
-}
-
-/// Public API: add a message bubble to the chat area.
-pub fn add_chat_message(text: impl Into<String>) -> Result<(), &'static str> {
-    UI_SENDER
-        .get()
-        .ok_or("UI not running")?
-        .send(UiCommand::AddMessage(text.into()))
-        .map_err(|_| "UI channel closed")
-}
-
-pub fn run_chat_ui(controller: Controller) -> eframe::Result<()> {
+pub fn run_chat_ui(
+    ui_cmd_tx: Sender<UiCommand>,
+    transcript_rx: Receiver<String>,
+) -> eframe::Result<()> {
     let (tx, rx) = mpsc::channel();
     let _ = UI_SENDER.set(tx);
+
+    // Background thread to feed transcript text into the input box.
+    thread::spawn(move || {
+        if let Some(ui_tx) = UI_SENDER.get() {
+            for text in transcript_rx {
+                let _ = ui_tx.send(InternalUi::AppendInput(format!("{text} ")));
+            }
+        }
+    });
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -44,82 +37,61 @@ pub fn run_chat_ui(controller: Controller) -> eframe::Result<()> {
     eframe::run_native(
         "Chat",
         options,
-        Box::new(move |_cc| Box::new(ChatApp::new(rx, controller))),
+        Box::new(move |_cc| {
+            Box::new(ChatApp::new(ui_cmd_tx.clone(), rx))
+        }),
     )
 }
 
 struct ChatApp {
-    rx: Receiver<UiCommand>,
+    ui_cmd_tx: Sender<UiCommand>,
+    internal_rx: Receiver<InternalUi>,
     messages: Vec<String>,
     input: String,
-    controller: Controller,
     listening: bool,
-    transcript_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ChatApp {
-    fn new(rx: Receiver<UiCommand>, controller: Controller) -> Self {
+    fn new(ui_cmd_tx: Sender<UiCommand>, internal_rx: Receiver<InternalUi>) -> Self {
         Self {
-            rx,
+            ui_cmd_tx,
+            internal_rx,
             messages: Vec::new(),
             input: String::new(),
-            controller,
             listening: false,
-            transcript_thread: None,
         }
     }
 
-    fn handle_commands(&mut self) {
-        for cmd in self.rx.try_iter() {
+    fn handle_internal(&mut self) {
+        for cmd in self.internal_rx.try_iter() {
             match cmd {
-                UiCommand::AppendInput(text) => self.input.push_str(&text),
-                UiCommand::AddMessage(text) => self.messages.push(text),
+                InternalUi::AppendInput(text) => self.input.push_str(&text),
             }
         }
     }
 
     fn submit(&mut self) {
         if !self.input.trim().is_empty() {
-            self.messages.push(self.input.trim().to_owned());
+            let message = self.input.trim().to_owned();
+            self.messages.push(message);
             self.input.clear();
         }
     }
 
-    fn start_listening(&mut self) {
+    fn toggle_listen(&mut self) {
         if self.listening {
-            return;
-        }
-
-        match self.controller.start_listening() {
-            Ok(rx) => {
-                let ui_sender = UI_SENDER.get().cloned();
-                self.transcript_thread = Some(thread::spawn(move || {
-                    if let Some(tx) = ui_sender {
-                        for text in rx {
-                            let _ = tx.send(UiCommand::AppendInput(format!("{text} ")));
-                        }
-                    }
-                }));
-                self.listening = true;
-            }
-            Err(err) => {
-                self.messages.push(format!("Failed to start listening: {err:?}"));
-            }
-        }
-    }
-
-    fn stop_listening(&mut self) {
-        let _ = self.controller.stop_listening();
-        self.listening = false;
-        if let Some(handle) = self.transcript_thread.take() {
-            let _ = handle.join();
+            let _ = self.ui_cmd_tx.send(UiCommand::StopListening);
+            self.listening = false;
+        } else {
+            let _ = self.ui_cmd_tx.send(UiCommand::StartListening);
+            self.listening = true;
         }
     }
 }
 
 impl eframe::App for ChatApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.handle_commands();
+        self.handle_internal();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -158,16 +130,11 @@ impl eframe::App for ChatApp {
                     }
 
                     let listen_label = if self.listening { "Listening" } else { "Listen" };
-                    let listen_button = egui::SelectableLabel::new(self.listening, listen_label);
                     if ui
-                        .add_sized(button_size, listen_button)
+                        .add_sized(button_size, egui::SelectableLabel::new(self.listening, listen_label))
                         .clicked()
                     {
-                        if self.listening {
-                            self.stop_listening();
-                        } else {
-                            self.start_listening();
-                        }
+                        self.toggle_listen();
                     }
                 });
 
@@ -179,14 +146,9 @@ impl eframe::App for ChatApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.stop_listening();
-        self.controller.shutdown();
-    }
-}
-
-impl Drop for ChatApp {
-    fn drop(&mut self) {
-        self.stop_listening();
-        self.controller.shutdown();
+        let _ = self.ui_cmd_tx.send(UiCommand::Shutdown);
+        if self.listening {
+            let _ = self.ui_cmd_tx.send(UiCommand::StopListening);
+        }
     }
 }
