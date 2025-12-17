@@ -1,7 +1,9 @@
 use crate::channels::{AudioReceiver, TranscribedSender};
 use crate::messages::{AudioChunk, TranscribedOutput};
 use std::thread::{self, JoinHandle};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
+};
 
 const MODEL_PATH: &str = "models/ggml-small.en.bin";
 
@@ -12,7 +14,9 @@ pub struct Transcriber {
 impl Transcriber {
     pub fn new(audio_rx: AudioReceiver, output_tx: TranscribedSender) -> Self {
         let handle = thread::spawn(move || worker(audio_rx, output_tx));
-        Self { handle: Some(handle) }
+        Self {
+            handle: Some(handle),
+        }
     }
 }
 
@@ -25,7 +29,8 @@ impl Drop for Transcriber {
 }
 
 fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender) {
-    let ctx = match WhisperContext::new_with_params(MODEL_PATH, WhisperContextParameters::default()) {
+    let ctx = match WhisperContext::new_with_params(MODEL_PATH, WhisperContextParameters::default())
+    {
         Ok(c) => c,
         Err(err) => {
             eprintln!("Failed to load model {MODEL_PATH}: {err}");

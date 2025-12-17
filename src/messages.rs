@@ -1,11 +1,3 @@
-#[derive(Debug, Clone)]
-pub enum UiCommand {
-    StartListening,
-    StopListening,
-    ProcessText(String),
-    Shutdown,
-}
-
 /// Captured audio payload with metadata.
 #[derive(Clone, Debug)]
 pub struct AudioChunk {

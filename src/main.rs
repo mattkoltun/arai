@@ -11,18 +11,25 @@ use std::thread;
 fn main() {
     // Channels
     let (audio_tx, audio_rx) = mpsc::channel::<messages::AudioChunk>();
-    let (ui_cmd_tx, ui_cmd_rx) = mpsc::channel::<messages::UiCommand>();
     let (transcript_tx, transcript_rx) = mpsc::channel::<messages::TranscribedOutput>();
-    let (ui_update_tx, ui_update_rx) = mpsc::channel::<String>();
 
     let recorder = recorder::Recorder::new(audio_tx.clone());
     let transcriber = transcriber::Transcriber::new(audio_rx, transcript_tx);
-    let controller =
-        controller::Controller::new(recorder, transcriber, transcript_rx, ui_update_tx, ui_cmd_rx);
+    let ui = ui::MessageUi::new();
+    let ui_handle = ui.handle();
+    let controller = std::sync::Arc::new(controller::Controller::new(
+        recorder,
+        transcriber,
+        transcript_rx,
+        ui_handle,
+    ));
 
-    thread::spawn(move || controller.run());
+    let controller_runner = controller.clone();
+    let controller_handle = thread::spawn(move || controller_runner.run());
 
-    if let Err(err) = ui::run_chat_ui(ui_cmd_tx, ui_update_rx) {
+    if let Err(err) = ui.run(controller) {
         eprintln!("Failed to launch UI: {err}");
     }
+
+    let _ = controller_handle.join();
 }

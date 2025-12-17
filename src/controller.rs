@@ -1,72 +1,76 @@
-use crate::messages::UiCommand;
+use crate::channels::TranscribedReceiver;
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
-use crate::channels::TranscribedReceiver;
-use std::sync::mpsc::{Receiver, Sender};
+use crate::ui::UiHandle;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ControllerState {
-    Active,
-    ShuttingDown,
-}
+use std::time::Duration;
 
 pub struct Controller {
-    recorder: Recorder,
-    transcriber: Transcriber,
-    transcript_rx: TranscribedReceiver,
-    ui_update_tx: Sender<String>,
-    ui_cmd_rx: Receiver<UiCommand>,
-    state: ControllerState,
+    recorder: Mutex<Recorder>,
+    transcriber: Mutex<Option<Transcriber>>,
+    transcript_rx: Mutex<TranscribedReceiver>,
+    ui: UiHandle,
+    shutting_down: AtomicBool,
 }
 
-#[derive(Debug)]
-pub enum ControllerError {
-    Recorder(crate::recorder::RecorderError),
-}
+pub type ControllerHandle = Arc<Controller>;
 
 impl Controller {
     pub fn new(
         recorder: Recorder,
         transcriber: Transcriber,
         transcript_rx: TranscribedReceiver,
-        ui_update_tx: Sender<String>,
-        ui_cmd_rx: Receiver<UiCommand>,
+        ui: UiHandle,
     ) -> Self {
         Self {
-            recorder,
-            transcriber,
-            transcript_rx,
-            ui_update_tx,
-            ui_cmd_rx,
-            state: ControllerState::Active,
+            recorder: Mutex::new(recorder),
+            transcriber: Mutex::new(Some(transcriber)),
+            transcript_rx: Mutex::new(transcript_rx),
+            ui,
+            shutting_down: AtomicBool::new(false),
         }
     }
 
-    pub fn run(mut self) {
-        while self.state == ControllerState::Active {
-            for cmd in self.ui_cmd_rx.try_iter() {
-                match cmd {
-                    UiCommand::StartListening => {
-                        let _ = self.recorder.start();
-                    }
-                    UiCommand::StopListening => {
-                        let _ = self.recorder.stop();
-                    }
-                    UiCommand::Shutdown => {
-                        self.state = ControllerState::ShuttingDown;
-                    }
+    pub fn start_listening(&self) {
+        if let Ok(mut recorder) = self.recorder.lock() {
+            let _ = recorder.start();
+        }
+    }
+
+    pub fn stop_listening(&self) {
+        if let Ok(mut recorder) = self.recorder.lock() {
+            let _ = recorder.stop();
+        }
+    }
+
+    pub fn process_text(&self, text: String) {
+        self.ui.submit_processed_text(text);
+    }
+
+    pub fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+    }
+
+    pub fn run(self: Arc<Self>) {
+        while !self.shutting_down.load(Ordering::SeqCst) {
+            if let Ok(rx) = self.transcript_rx.lock() {
+                for line in rx.try_iter() {
+                    self.ui
+                        .append_to_text_field(format!("{text} ", text = line.text));
                 }
             }
 
-            for line in self.transcript_rx.try_iter() {
-                let _ = self.ui_update_tx.send(line.text);
-            }
-
-            thread::sleep(std::time::Duration::from_millis(10));
+            self.ui.refresh();
+            thread::sleep(Duration::from_millis(10));
         }
 
-        let _ = self.recorder.stop();
-        drop(self.transcriber);
+        self.stop_listening();
+        if let Ok(mut transcriber) = self.transcriber.lock() {
+            transcriber.take();
+        }
     }
 }

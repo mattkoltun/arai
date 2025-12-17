@@ -156,10 +156,16 @@ impl Recorder {
     }
 
     pub fn stop(&mut self) -> Result<(), RecorderError> {
+        if self.handle.is_none() {
+            return Ok(());
+        }
+
         self.stop_flag.store(true, Ordering::SeqCst);
+
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+
         Ok(())
     }
 }
