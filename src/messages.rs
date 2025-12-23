@@ -11,3 +11,24 @@ pub struct AudioChunk {
 pub struct TranscribedOutput {
     pub text: String,
 }
+
+#[derive(Clone, Debug)]
+pub enum AppEventSource {
+    Recorder,
+    Transcriber,
+    Ui,
+}
+
+#[derive(Clone, Debug)]
+pub enum AppEventKind {
+    Started,
+    Stopped,
+    Error(String),
+    Status(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct AppEvent {
+    pub source: AppEventSource,
+    pub kind: AppEventKind,
+}

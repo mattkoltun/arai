@@ -1,5 +1,5 @@
-use crate::channels::AudioSender;
-use crate::messages::AudioChunk;
+use crate::channels::{AppEventSender, AudioSender};
+use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,14 +18,16 @@ pub enum RecorderError {
 
 pub struct Recorder {
     audio_tx: AudioSender,
+    app_event_tx: AppEventSender,
     stop_flag: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl Recorder {
-    pub fn new(audio_tx: AudioSender) -> Self {
+    pub fn new(audio_tx: AudioSender, app_event_tx: AppEventSender) -> Self {
         Self {
             audio_tx,
+            app_event_tx,
             stop_flag: Arc::new(AtomicBool::new(false)),
             handle: None,
         }
@@ -39,16 +41,29 @@ impl Recorder {
         let stop_flag = Arc::clone(&self.stop_flag);
         stop_flag.store(false, Ordering::SeqCst);
         let audio_tx = self.audio_tx.clone();
+        let app_event_tx = self.app_event_tx.clone();
 
         let handle = thread::spawn(move || {
             let host = cpal::default_host();
             let device = match host.default_input_device() {
                 Some(d) => d,
-                None => return,
+                None => {
+                    let _ = app_event_tx.send(AppEvent {
+                        source: AppEventSource::Recorder,
+                        kind: AppEventKind::Error("No input device".into()),
+                    });
+                    return;
+                }
             };
             let config = match device.default_input_config() {
                 Ok(c) => c,
-                Err(_) => return,
+                Err(err) => {
+                    let _ = app_event_tx.send(AppEvent {
+                        source: AppEventSource::Recorder,
+                        kind: AppEventKind::Error(format!("Stream config error: {err}")),
+                    });
+                    return;
+                }
             };
             let sample_rate = config.sample_rate().0;
             let channels = config.channels();
@@ -57,7 +72,12 @@ impl Recorder {
             let last_chunk_cb = Arc::clone(&last_chunk);
             let audio_tx_final = audio_tx.clone();
 
-            let err_fn = |err| eprintln!("input stream error: {err}");
+            let err_fn = |err| {
+                let _ = app_event_tx.send(AppEvent {
+                    source: AppEventSource::Recorder,
+                    kind: AppEventKind::Error(format!("Input stream error: {err}")),
+                });
+            };
 
             let stream_result: Result<Stream, _> = match config.sample_format() {
                 SampleFormat::F32 => device.build_input_stream(
@@ -128,10 +148,20 @@ impl Recorder {
 
             let stream = match stream_result {
                 Ok(s) => s,
-                Err(_) => return,
+                Err(err) => {
+                    let _ = app_event_tx.send(AppEvent {
+                        source: AppEventSource::Recorder,
+                        kind: AppEventKind::Error(format!("Build stream error: {err}")),
+                    });
+                    return;
+                }
             };
 
-            if stream.play().is_err() {
+            if let Err(err) = stream.play() {
+                let _ = app_event_tx.send(AppEvent {
+                    source: AppEventSource::Recorder,
+                    kind: AppEventKind::Error(format!("Play stream error: {err}")),
+                });
                 return;
             }
 
@@ -149,6 +179,11 @@ impl Recorder {
                     });
                 }
             }
+
+            let _ = app_event_tx.send(AppEvent {
+                source: AppEventSource::Recorder,
+                kind: AppEventKind::Stopped,
+            });
         });
 
         self.handle = Some(handle);

@@ -1,4 +1,5 @@
-use crate::channels::TranscribedReceiver;
+use crate::channels::{AppEventReceiver, TranscribedReceiver};
+use crate::messages::{AppEventKind, AppEventSource};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
 use crate::ui::UiHandle;
@@ -13,6 +14,7 @@ pub struct Controller {
     recorder: Mutex<Recorder>,
     transcriber: Mutex<Option<Transcriber>>,
     transcript_rx: Mutex<TranscribedReceiver>,
+    app_event_rx: Mutex<AppEventReceiver>,
     ui: UiHandle,
     shutting_down: AtomicBool,
 }
@@ -24,12 +26,14 @@ impl Controller {
         recorder: Recorder,
         transcriber: Transcriber,
         transcript_rx: TranscribedReceiver,
+        app_event_rx: AppEventReceiver,
         ui: UiHandle,
     ) -> Self {
         Self {
             recorder: Mutex::new(recorder),
             transcriber: Mutex::new(Some(transcriber)),
             transcript_rx: Mutex::new(transcript_rx),
+            app_event_rx: Mutex::new(app_event_rx),
             ui,
             shutting_down: AtomicBool::new(false),
         }
@@ -61,6 +65,21 @@ impl Controller {
                 for line in rx.try_iter() {
                     self.ui
                         .append_to_text_field(format!("{text} ", text = line.text));
+                }
+            }
+
+            if let Ok(app_rx) = self.app_event_rx.lock() {
+                for event in app_rx.try_iter() {
+                    match (event.source, event.kind) {
+                        (AppEventSource::Recorder, AppEventKind::Error(message)) => {
+                            eprintln!("Recorder event: {message}");
+                            // TODO: implement recorder error handling (e.g., restart recorder or update UI)
+                        }
+                        (source, kind) => {
+                            let _ = (source, kind);
+                            // TODO: handle other app events
+                        }
+                    }
                 }
             }
 

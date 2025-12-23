@@ -1,5 +1,5 @@
-use crate::channels::{AudioReceiver, TranscribedSender};
-use crate::messages::{AudioChunk, TranscribedOutput};
+use crate::channels::{AppEventSender, AudioReceiver, TranscribedSender};
+use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk, TranscribedOutput};
 use std::thread::{self, JoinHandle};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
@@ -12,8 +12,12 @@ pub struct Transcriber {
 }
 
 impl Transcriber {
-    pub fn new(audio_rx: AudioReceiver, output_tx: TranscribedSender) -> Self {
-        let handle = thread::spawn(move || worker(audio_rx, output_tx));
+    pub fn new(
+        audio_rx: AudioReceiver,
+        output_tx: TranscribedSender,
+        app_event_tx: AppEventSender,
+    ) -> Self {
+        let handle = thread::spawn(move || worker(audio_rx, output_tx, app_event_tx));
         Self {
             handle: Some(handle),
         }
@@ -28,12 +32,15 @@ impl Drop for Transcriber {
     }
 }
 
-fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender) {
+fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender, app_event_tx: AppEventSender) {
     let ctx = match WhisperContext::new_with_params(MODEL_PATH, WhisperContextParameters::default())
     {
         Ok(c) => c,
         Err(err) => {
-            eprintln!("Failed to load model {MODEL_PATH}: {err}");
+            let _ = app_event_tx.send(AppEvent {
+                source: AppEventSource::Transcriber,
+                kind: AppEventKind::Error(format!("Failed to load model: {err}")),
+            });
             return;
         }
     };
@@ -43,7 +50,12 @@ fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender) {
             Ok(text) => {
                 let _ = output_tx.send(TranscribedOutput { text });
             }
-            Err(err) => eprintln!("Transcription error: {err}"),
+            Err(err) => {
+                let _ = app_event_tx.send(AppEvent {
+                    source: AppEventSource::Transcriber,
+                    kind: AppEventKind::Error(format!("Transcription error: {err}")),
+                });
+            }
         }
     }
 }

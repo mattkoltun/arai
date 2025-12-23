@@ -1,3 +1,4 @@
+use crate::channels::AppEventSender;
 use crate::controller::ControllerHandle;
 use eframe::egui::{self, TextEdit, TopBottomPanel};
 use std::sync::{
@@ -23,15 +24,17 @@ pub struct UiHandle {
 pub struct MessageUi {
     state: Arc<Mutex<UiState>>,
     repaint_requested: Arc<AtomicBool>,
+    _app_event_tx: AppEventSender,
 }
 
 impl MessageUi {
-    pub fn new() -> Self {
+    pub fn new(app_event_tx: AppEventSender) -> Self {
         let state = Arc::new(Mutex::new(UiState::default()));
         let repaint_requested = Arc::new(AtomicBool::new(false));
         Self {
             state,
             repaint_requested,
+            _app_event_tx: app_event_tx,
         }
     }
 
