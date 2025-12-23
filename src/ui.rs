@@ -1,6 +1,7 @@
 use crate::channels::AppEventSender;
 use crate::controller::ControllerHandle;
 use eframe::egui::{self, TextEdit, TopBottomPanel};
+use log::{debug, info};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -60,7 +61,8 @@ impl MessageUi {
             "Message Formatter",
             options,
             Box::new(move |_cc| {
-                Box::new(FormatterApp::new(
+                info!("UI initialized");
+                Box::new(App::new(
                     controller.clone(),
                     state.clone(),
                     repaint_requested.clone(),
@@ -102,13 +104,13 @@ impl UiHandle {
     }
 }
 
-struct FormatterApp {
+struct App {
     controller: ControllerHandle,
     state: Arc<Mutex<UiState>>,
     repaint_requested: Arc<AtomicBool>,
 }
 
-impl FormatterApp {
+impl App {
     fn new(
         controller: ControllerHandle,
         state: Arc<Mutex<UiState>>,
@@ -131,9 +133,11 @@ impl FormatterApp {
         }
 
         if state.listening {
+            debug!("UI stopping listen");
             self.controller.stop_listening();
             state.listening = false;
         } else {
+            debug!("UI starting listen");
             self.controller.start_listening();
             state.listening = true;
         }
@@ -158,6 +162,7 @@ impl FormatterApp {
         };
 
         if should_send {
+            debug!("UI processing requested");
             self.controller.process_text(text);
         }
     }
@@ -175,13 +180,14 @@ impl FormatterApp {
         };
 
         if let Some(text) = processed {
+            debug!("UI copying processed text");
             ctx.output_mut(|o| o.copied_text = text.clone());
             self.controller.shutdown();
         }
     }
 }
 
-impl eframe::App for FormatterApp {
+impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.repaint_requested.swap(false, Ordering::SeqCst) {
             ctx.request_repaint();
@@ -274,6 +280,7 @@ impl eframe::App for FormatterApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        info!("UI exit requested");
         self.controller.shutdown();
     }
 }

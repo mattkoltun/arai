@@ -3,6 +3,7 @@ use crate::messages::{AppEventKind, AppEventSource};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
 use crate::ui::UiHandle;
+use log::{debug, error, info};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -40,26 +41,26 @@ impl Controller {
     }
 
     pub fn start_listening(&self) {
-        if let Ok(mut recorder) = self.recorder.lock() {
-            if let Some(recorder) = recorder.as_mut() {
-                let _ = recorder.start();
-            }
+        if let Ok(mut recorder) = self.recorder.lock() && let Some(recorder) = recorder.as_mut() {
+            info!("Controller starting recorder");
+            let _ = recorder.start();
         }
     }
 
     pub fn stop_listening(&self) {
-        if let Ok(mut recorder) = self.recorder.lock() {
-            if let Some(recorder) = recorder.as_mut() {
-                let _ = recorder.stop();
-            }
+        if let Ok(mut recorder) = self.recorder.lock() && let Some(recorder) = recorder.as_mut() {
+            info!("Controller stopping recorder");
+            let _ = recorder.stop();
         }
     }
 
     pub fn process_text(&self, text: String) {
+        debug!("Controller processing text");
         self.ui.submit_processed_text(text);
     }
 
     pub fn shutdown(&self) {
+        info!("Controller shutdown requested");
         self.shutting_down.store(true, Ordering::SeqCst);
     }
 
@@ -67,6 +68,7 @@ impl Controller {
         while !self.shutting_down.load(Ordering::SeqCst) {
             if let Ok(rx) = self.transcript_rx.lock() {
                 for line in rx.try_iter() {
+                    debug!("Controller received transcript");
                     self.ui
                         .append_to_text_field(format!("{text} ", text = line.text));
                 }
@@ -76,8 +78,11 @@ impl Controller {
                 for event in app_rx.try_iter() {
                     match (event.source, event.kind) {
                         (AppEventSource::Recorder, AppEventKind::Error(message)) => {
-                            eprintln!("Recorder event: {message}");
+                            error!("Recorder event: {message}");
                             // TODO: implement recorder error handling (e.g., restart recorder or update UI)
+                        }
+                        (AppEventSource::Transcriber, AppEventKind::Error(message)) => {
+                            error!("Transcriber event: {message}");
                         }
                         (source, kind) => {
                             let _ = (source, kind);
@@ -91,10 +96,9 @@ impl Controller {
             thread::sleep(Duration::from_millis(10));
         }
 
-        if let Ok(mut recorder) = self.recorder.lock() {
-            if let Some(mut recorder) = recorder.take() {
-                let _ = recorder.stop();
-            }
+        info!("Controller shutting down");
+        if let Ok(mut recorder) = self.recorder.lock() && let Some(mut recorder) = recorder.take() {
+            let _ = recorder.stop();
         }
         if let Ok(mut transcriber) = self.transcriber.lock() {
             transcriber.take();

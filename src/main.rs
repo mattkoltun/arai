@@ -1,5 +1,6 @@
 mod channels;
 mod controller;
+mod logger;
 mod messages;
 mod recorder;
 mod transcriber;
@@ -9,6 +10,18 @@ use std::sync::mpsc;
 use std::thread;
 
 fn main() {
+    let mut log_config = logger::LogConfig::default();
+    if let Ok(level) = std::env::var("ARAI_LOG_LEVEL") && let Some(parsed) = logger::parse_level(&level) {
+        log_config.level = parsed;
+    }
+    if let Ok(path) = std::env::var("ARAI_LOG_PATH") {
+        log_config.path = path.into();
+    }
+    if let Err(err) = logger::init_with_config(log_config) {
+        eprintln!("Failed to init logger: {err}");
+    }
+    log::info!("Starting Arai");
+
     // Channels
     let (audio_tx, audio_rx) = mpsc::channel::<messages::AudioChunk>();
     let (transcript_tx, transcript_rx) = mpsc::channel::<messages::TranscribedOutput>();
@@ -31,9 +44,10 @@ fn main() {
     let controller_handle = thread::spawn(move || controller_runner.run());
 
     if let Err(err) = ui.run(controller) {
-        eprintln!("Failed to launch UI: {err}");
+        log::error!("Failed to launch UI: {err}");
     }
     controller_shutdown.shutdown();
 
     let _ = controller_handle.join();
+    log::info!("Arai shutdown complete");
 }

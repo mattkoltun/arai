@@ -2,6 +2,7 @@ use crate::channels::{AppEventSender, AudioSender};
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
+use log::{debug, error, info};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -10,10 +11,6 @@ use std::time::Duration;
 #[derive(Debug)]
 pub enum RecorderError {
     AlreadyRunning,
-    NoInputDevice,
-    StreamConfig(cpal::DefaultStreamConfigError),
-    BuildStream(cpal::BuildStreamError),
-    PlayStream(cpal::PlayStreamError),
 }
 
 pub struct Recorder {
@@ -38,6 +35,7 @@ impl Recorder {
             return Err(RecorderError::AlreadyRunning);
         }
 
+        info!("Recorder starting");
         let stop_flag = Arc::clone(&self.stop_flag);
         stop_flag.store(false, Ordering::SeqCst);
         let audio_tx = self.audio_tx.clone();
@@ -48,6 +46,7 @@ impl Recorder {
             let device = match host.default_input_device() {
                 Some(d) => d,
                 None => {
+                    error!("No input device available");
                     let _ = app_event_tx.send(AppEvent {
                         source: AppEventSource::Recorder,
                         kind: AppEventKind::Error("No input device".into()),
@@ -58,6 +57,7 @@ impl Recorder {
             let config = match device.default_input_config() {
                 Ok(c) => c,
                 Err(err) => {
+                    error!("Stream config error: {err}");
                     let _ = app_event_tx.send(AppEvent {
                         source: AppEventSource::Recorder,
                         kind: AppEventKind::Error(format!("Stream config error: {err}")),
@@ -73,7 +73,8 @@ impl Recorder {
             let audio_tx_final = audio_tx.clone();
 
             let app_event_tx_clone = app_event_tx.clone();
-            let err_fn =  move |err| {
+            let err_fn = move |err| {
+                error!("Input stream error: {err}");
                 let _ = app_event_tx_clone.send(AppEvent {
                     source: AppEventSource::Recorder,
                     kind: AppEventKind::Error(format!("Input stream error: {err}")),
@@ -150,6 +151,7 @@ impl Recorder {
             let stream = match stream_result {
                 Ok(s) => s,
                 Err(err) => {
+                    error!("Build stream error: {err}");
                     let _ = app_event_tx.send(AppEvent {
                         source: AppEventSource::Recorder,
                         kind: AppEventKind::Error(format!("Build stream error: {err}")),
@@ -159,6 +161,7 @@ impl Recorder {
             };
 
             if let Err(err) = stream.play() {
+                error!("Play stream error: {err}");
                 let _ = app_event_tx.send(AppEvent {
                     source: AppEventSource::Recorder,
                     kind: AppEventKind::Error(format!("Play stream error: {err}")),
@@ -166,25 +169,26 @@ impl Recorder {
                 return;
             }
 
+            info!("Recorder stream started");
             while !stop_flag.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(20));
             }
 
-            if let Ok(mut last) = last_chunk.lock() {
-                if let Some(samples) = last.take() {
-                    let _ = audio_tx_final.send(AudioChunk {
-                        sample_rate,
-                        channels,
-                        samples,
-                        is_final: true,
-                    });
-                }
+            debug!("Recorder stopping");
+            if let Ok(mut last) = last_chunk.lock() && let Some(samples) = last.take() {
+                let _ = audio_tx_final.send(AudioChunk {
+                    sample_rate,
+                    channels,
+                    samples,
+                    is_final: true,
+                });
             }
 
             let _ = app_event_tx.send(AppEvent {
                 source: AppEventSource::Recorder,
                 kind: AppEventKind::Stopped,
             });
+            info!("Recorder stopped");
         });
 
         self.handle = Some(handle);

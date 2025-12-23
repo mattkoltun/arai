@@ -12,7 +12,7 @@ pub struct TranscribedOutput {
     pub text: String,
 }
 
-#[derive(Clone, Debug)]
+// #[derive(Clone, Debug)]
 pub enum AppEventSource {
     Recorder,
     Transcriber,
@@ -27,7 +27,7 @@ pub enum AppEventKind {
     Status(String),
 }
 
-#[derive(Clone, Debug)]
+// #[derive(Clone, Debug)]
 pub struct AppEvent {
     pub source: AppEventSource,
     pub kind: AppEventKind,

@@ -1,5 +1,6 @@
 use crate::channels::{AppEventSender, AudioReceiver, TranscribedSender};
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk, TranscribedOutput};
+use log::{debug, error, info};
 use std::thread::{self, JoinHandle};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
@@ -37,6 +38,7 @@ fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender, app_event_tx: A
     {
         Ok(c) => c,
         Err(err) => {
+            error!("Failed to load model: {err}");
             let _ = app_event_tx.send(AppEvent {
                 source: AppEventSource::Transcriber,
                 kind: AppEventKind::Error(format!("Failed to load model: {err}")),
@@ -45,12 +47,15 @@ fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender, app_event_tx: A
         }
     };
 
+    info!("Transcriber ready");
     while let Ok(chunk) = audio_rx.recv() {
+        debug!("Transcriber received audio chunk");
         match transcribe_chunk(&ctx, &chunk) {
             Ok(text) => {
                 let _ = output_tx.send(TranscribedOutput { text });
             }
             Err(err) => {
+                error!("Transcription error: {err}");
                 let _ = app_event_tx.send(AppEvent {
                     source: AppEventSource::Transcriber,
                     kind: AppEventKind::Error(format!("Transcription error: {err}")),
