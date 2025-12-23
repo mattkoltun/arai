@@ -25,6 +25,10 @@ pub enum AppEventKind {
     Stopped,
     Error(String),
     Status(String),
+    UiStartListening,
+    UiStopListening,
+    UiProcessText(String),
+    UiShutdown,
 }
 
 // #[derive(Clone, Debug)]

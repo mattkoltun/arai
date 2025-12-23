@@ -2,7 +2,7 @@ use crate::channels::{AppEventReceiver, TranscribedReceiver};
 use crate::messages::{AppEventKind, AppEventSource};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
-use crate::ui::UiHandle;
+use crate::ui::Ui;
 use log::{debug, error, info};
 use std::sync::{
     Arc, Mutex,
@@ -16,7 +16,7 @@ pub struct Controller {
     transcriber: Mutex<Option<Transcriber>>,
     transcript_rx: Mutex<TranscribedReceiver>,
     app_event_rx: Mutex<AppEventReceiver>,
-    ui: UiHandle,
+    ui: Ui,
     shutting_down: AtomicBool,
 }
 
@@ -28,7 +28,7 @@ impl Controller {
         transcriber: Transcriber,
         transcript_rx: TranscribedReceiver,
         app_event_rx: AppEventReceiver,
-        ui: UiHandle,
+        ui: Ui,
     ) -> Self {
         Self {
             recorder: Mutex::new(Some(recorder)),
@@ -83,6 +83,18 @@ impl Controller {
                         }
                         (AppEventSource::Transcriber, AppEventKind::Error(message)) => {
                             error!("Transcriber event: {message}");
+                        }
+                        (AppEventSource::Ui, AppEventKind::UiStartListening) => {
+                            self.start_listening();
+                        }
+                        (AppEventSource::Ui, AppEventKind::UiStopListening) => {
+                            self.stop_listening();
+                        }
+                        (AppEventSource::Ui, AppEventKind::UiProcessText(text)) => {
+                            self.process_text(text);
+                        }
+                        (AppEventSource::Ui, AppEventKind::UiShutdown) => {
+                            self.shutdown();
                         }
                         (source, kind) => {
                             let _ = (source, kind);

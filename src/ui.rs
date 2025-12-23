@@ -1,5 +1,5 @@
 use crate::channels::AppEventSender;
-use crate::controller::ControllerHandle;
+use crate::messages::{AppEvent, AppEventKind, AppEventSource};
 use eframe::egui::{self, TextEdit, TopBottomPanel};
 use log::{debug, info};
 use std::sync::{
@@ -17,36 +17,24 @@ struct UiState {
 }
 
 #[derive(Clone)]
-pub struct UiHandle {
+pub struct Ui {
     state: Arc<Mutex<UiState>>,
     repaint_requested: Arc<AtomicBool>,
+    app_event_tx: AppEventSender,
 }
 
-pub struct MessageUi {
-    state: Arc<Mutex<UiState>>,
-    repaint_requested: Arc<AtomicBool>,
-    _app_event_tx: AppEventSender,
-}
-
-impl MessageUi {
+impl Ui {
     pub fn new(app_event_tx: AppEventSender) -> Self {
         let state = Arc::new(Mutex::new(UiState::default()));
         let repaint_requested = Arc::new(AtomicBool::new(false));
         Self {
             state,
             repaint_requested,
-            _app_event_tx: app_event_tx,
+            app_event_tx,
         }
     }
 
-    pub fn handle(&self) -> UiHandle {
-        UiHandle {
-            state: Arc::clone(&self.state),
-            repaint_requested: Arc::clone(&self.repaint_requested),
-        }
-    }
-
-    pub fn run(self, controller: ControllerHandle) -> eframe::Result<()> {
+    pub fn run(&self) -> eframe::Result<()> {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_always_on_top()
@@ -54,25 +42,18 @@ impl MessageUi {
             ..Default::default()
         };
 
-        let state = Arc::clone(&self.state);
-        let repaint_requested = Arc::clone(&self.repaint_requested);
+        let app = self.clone();
 
         eframe::run_native(
             "Message Formatter",
             options,
             Box::new(move |_cc| {
                 info!("UI initialized");
-                Box::new(App::new(
-                    controller.clone(),
-                    state.clone(),
-                    repaint_requested.clone(),
-                ))
+                Box::new(app.clone())
             }),
         )
     }
-}
 
-impl UiHandle {
     pub fn append_to_text_field(&self, text: impl Into<String>) {
         if let Ok(mut state) = self.state.lock() {
             let text = text.into();
@@ -102,25 +83,12 @@ impl UiHandle {
             self.repaint_requested.store(true, Ordering::SeqCst);
         }
     }
-}
 
-struct App {
-    controller: ControllerHandle,
-    state: Arc<Mutex<UiState>>,
-    repaint_requested: Arc<AtomicBool>,
-}
-
-impl App {
-    fn new(
-        controller: ControllerHandle,
-        state: Arc<Mutex<UiState>>,
-        repaint_requested: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            controller,
-            state,
-            repaint_requested,
-        }
+    fn send_event(&self, kind: AppEventKind) {
+        let _ = self.app_event_tx.send(AppEvent {
+            source: AppEventSource::Ui,
+            kind,
+        });
     }
 
     fn toggle_listen(&self) {
@@ -134,11 +102,11 @@ impl App {
 
         if state.listening {
             debug!("UI stopping listen");
-            self.controller.stop_listening();
+            self.send_event(AppEventKind::UiStopListening);
             state.listening = false;
         } else {
             debug!("UI starting listen");
-            self.controller.start_listening();
+            self.send_event(AppEventKind::UiStartListening);
             state.listening = true;
         }
         state.needs_repaint = true;
@@ -163,7 +131,7 @@ impl App {
 
         if should_send {
             debug!("UI processing requested");
-            self.controller.process_text(text);
+            self.send_event(AppEventKind::UiProcessText(text));
         }
     }
 
@@ -182,12 +150,12 @@ impl App {
         if let Some(text) = processed {
             debug!("UI copying processed text");
             ctx.output_mut(|o| o.copied_text = text.clone());
-            self.controller.shutdown();
+            self.send_event(AppEventKind::UiShutdown);
         }
     }
 }
 
-impl eframe::App for App {
+impl eframe::App for Ui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.repaint_requested.swap(false, Ordering::SeqCst) {
             ctx.request_repaint();
@@ -281,6 +249,6 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         info!("UI exit requested");
-        self.controller.shutdown();
+        self.send_event(AppEventKind::UiShutdown);
     }
 }
