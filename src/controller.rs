@@ -11,7 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 pub struct Controller {
-    recorder: Mutex<Recorder>,
+    recorder: Mutex<Option<Recorder>>,
     transcriber: Mutex<Option<Transcriber>>,
     transcript_rx: Mutex<TranscribedReceiver>,
     app_event_rx: Mutex<AppEventReceiver>,
@@ -30,7 +30,7 @@ impl Controller {
         ui: UiHandle,
     ) -> Self {
         Self {
-            recorder: Mutex::new(recorder),
+            recorder: Mutex::new(Some(recorder)),
             transcriber: Mutex::new(Some(transcriber)),
             transcript_rx: Mutex::new(transcript_rx),
             app_event_rx: Mutex::new(app_event_rx),
@@ -41,13 +41,17 @@ impl Controller {
 
     pub fn start_listening(&self) {
         if let Ok(mut recorder) = self.recorder.lock() {
-            let _ = recorder.start();
+            if let Some(recorder) = recorder.as_mut() {
+                let _ = recorder.start();
+            }
         }
     }
 
     pub fn stop_listening(&self) {
         if let Ok(mut recorder) = self.recorder.lock() {
-            let _ = recorder.stop();
+            if let Some(recorder) = recorder.as_mut() {
+                let _ = recorder.stop();
+            }
         }
     }
 
@@ -87,7 +91,11 @@ impl Controller {
             thread::sleep(Duration::from_millis(10));
         }
 
-        self.stop_listening();
+        if let Ok(mut recorder) = self.recorder.lock() {
+            if let Some(mut recorder) = recorder.take() {
+                let _ = recorder.stop();
+            }
+        }
         if let Ok(mut transcriber) = self.transcriber.lock() {
             transcriber.take();
         }
