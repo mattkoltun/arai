@@ -72,8 +72,9 @@ impl Recorder {
             let last_chunk_cb = Arc::clone(&last_chunk);
             let audio_tx_final = audio_tx.clone();
 
-            let err_fn = |err| {
-                let _ = app_event_tx.send(AppEvent {
+            let app_event_tx_clone = app_event_tx.clone();
+            let err_fn =  move |err| {
+                let _ = app_event_tx_clone.send(AppEvent {
                     source: AppEventSource::Recorder,
                     kind: AppEventKind::Error(format!("Input stream error: {err}")),
                 });
