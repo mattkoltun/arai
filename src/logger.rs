@@ -41,7 +41,7 @@ pub struct LogConfig {
 impl Default for LogConfig {
     fn default() -> Self {
         Self {
-            level: LevelFilter::Trace,
+            level: LevelFilter::Debug,
             path: PathBuf::from("/var/log/arai.log"),
         }
     }

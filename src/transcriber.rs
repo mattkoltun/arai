@@ -52,6 +52,8 @@ fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender, app_event_tx: A
         debug!("Transcriber received audio chunk");
         match transcribe_chunk(&ctx, &chunk) {
             Ok(text) => {
+                println!("Transcribed: {}", text);
+                debug!("Transcription result: {}", text);
                 let _ = output_tx.send(TranscribedOutput { text });
             }
             Err(err) => {
