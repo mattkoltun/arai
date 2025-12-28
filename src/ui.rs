@@ -113,13 +113,13 @@ impl Ui {
         self.repaint_requested.store(true, Ordering::SeqCst);
     }
 
-    fn process(&self) {
+    fn submit(&self) {
         let (should_send, text) = {
             let mut state = match self.state.lock() {
                 Ok(guard) => guard,
                 Err(_) => return,
             };
-            if state.processing || state.input.trim().is_empty() {
+            if state.processing || state.listening || state.input.trim().is_empty() {
                 return;
             }
             state.processing = true;
@@ -130,8 +130,8 @@ impl Ui {
         };
 
         if should_send {
-            debug!("UI processing requested");
-            self.send_event(AppEventKind::UiProcessText(text));
+            debug!("UI submit requested");
+            self.send_event(AppEventKind::UiSubmitText(text));
         }
     }
 
@@ -198,16 +198,16 @@ impl eframe::App for Ui {
                     ui.add_space(8.0);
 
                     let process_label = if processing {
-                        "Processing..."
+                        "Submitting..."
                     } else {
-                        "Process"
+                        "Submit"
                     };
                     let process_response = ui.add_enabled(
-                        !processing && has_input,
+                        !processing && has_input && !listening,
                         egui::Button::new(process_label).min_size(button_size),
                     );
                     if process_response.clicked() {
-                        self.process();
+                        self.submit();
                     }
                     if processing {
                         let mut overlay = ui.child_ui(

@@ -16,6 +16,7 @@ pub struct TranscribedOutput {
 pub enum AppEventSource {
     Recorder,
     Transcriber,
+    Agent,
     Ui,
 }
 
@@ -27,8 +28,9 @@ pub enum AppEventKind {
     Status(String),
     UiStartListening,
     UiStopListening,
-    UiProcessText(String),
+    UiSubmitText(String),
     UiShutdown,
+    AgentResponse(String),
 }
 
 // #[derive(Clone, Debug)]

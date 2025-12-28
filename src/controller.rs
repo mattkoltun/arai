@@ -1,3 +1,4 @@
+use crate::agent::Agent;
 use crate::channels::{AppEventReceiver, TranscribedReceiver};
 use crate::messages::{AppEventKind, AppEventSource};
 use crate::recorder::Recorder;
@@ -16,6 +17,7 @@ pub struct Controller {
     transcriber: Mutex<Option<Transcriber>>,
     transcript_rx: Mutex<TranscribedReceiver>,
     app_event_rx: Mutex<AppEventReceiver>,
+    agent: Agent,
     ui: Ui,
     shutting_down: AtomicBool,
 }
@@ -28,6 +30,7 @@ impl Controller {
         transcriber: Transcriber,
         transcript_rx: TranscribedReceiver,
         app_event_rx: AppEventReceiver,
+        agent: Agent,
         ui: Ui,
     ) -> Self {
         Self {
@@ -35,20 +38,25 @@ impl Controller {
             transcriber: Mutex::new(Some(transcriber)),
             transcript_rx: Mutex::new(transcript_rx),
             app_event_rx: Mutex::new(app_event_rx),
+            agent,
             ui,
             shutting_down: AtomicBool::new(false),
         }
     }
 
     pub fn start_listening(&self) {
-        if let Ok(mut recorder) = self.recorder.lock() && let Some(recorder) = recorder.as_mut() {
+        if let Ok(mut recorder) = self.recorder.lock()
+            && let Some(recorder) = recorder.as_mut()
+        {
             info!("Controller starting recorder");
             let _ = recorder.start();
         }
     }
 
     pub fn stop_listening(&self) {
-        if let Ok(mut recorder) = self.recorder.lock() && let Some(recorder) = recorder.as_mut() {
+        if let Ok(mut recorder) = self.recorder.lock()
+            && let Some(recorder) = recorder.as_mut()
+        {
             info!("Controller stopping recorder");
             let _ = recorder.stop();
         }
@@ -57,6 +65,11 @@ impl Controller {
     pub fn process_text(&self, text: String) {
         debug!("Controller processing text");
         self.ui.submit_processed_text(text);
+    }
+
+    pub fn submit_text(&self, text: String) {
+        debug!("Controller submitting text");
+        self.agent.submit(text);
     }
 
     pub fn shutdown(&self) {
@@ -84,17 +97,23 @@ impl Controller {
                         (AppEventSource::Transcriber, AppEventKind::Error(message)) => {
                             error!("Transcriber event: {message}");
                         }
+                        (AppEventSource::Agent, AppEventKind::Error(message)) => {
+                            error!("Agent event: {message}");
+                        }
                         (AppEventSource::Ui, AppEventKind::UiStartListening) => {
                             self.start_listening();
                         }
                         (AppEventSource::Ui, AppEventKind::UiStopListening) => {
                             self.stop_listening();
                         }
-                        (AppEventSource::Ui, AppEventKind::UiProcessText(text)) => {
-                            self.process_text(text);
+                        (AppEventSource::Ui, AppEventKind::UiSubmitText(text)) => {
+                            self.submit_text(text);
                         }
                         (AppEventSource::Ui, AppEventKind::UiShutdown) => {
                             self.shutdown();
+                        }
+                        (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
+                            self.process_text(text);
                         }
                         (source, kind) => {
                             let _ = (source, kind);
@@ -109,7 +128,9 @@ impl Controller {
         }
 
         info!("Controller shutting down");
-        if let Ok(mut recorder) = self.recorder.lock() && let Some(mut recorder) = recorder.take() {
+        if let Ok(mut recorder) = self.recorder.lock()
+            && let Some(mut recorder) = recorder.take()
+        {
             let _ = recorder.stop();
         }
         if let Ok(mut transcriber) = self.transcriber.lock() {

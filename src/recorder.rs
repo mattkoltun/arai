@@ -178,7 +178,9 @@ impl Recorder {
             }
 
             debug!("Recorder stopping");
-            if let Ok(mut last) = last_chunk.lock() && let Some(samples) = last.take() {
+            if let Ok(mut last) = last_chunk.lock()
+                && let Some(samples) = last.take()
+            {
                 let _ = audio_tx_final.send(AudioChunk {
                     sample_rate,
                     channels,
