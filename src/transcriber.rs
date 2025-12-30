@@ -75,9 +75,7 @@ fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender, app_event_tx: A
                 }
             }
 
-            if chunk.is_final {
-                buffer.clear();
-            } else if overlap_samples == 0 || buffer.len() <= overlap_samples {
+            if chunk.is_final || overlap_samples == 0 || buffer.len() <= overlap_samples {
                 buffer.clear();
             } else {
                 let start = buffer.len() - overlap_samples;
@@ -93,6 +91,12 @@ fn transcribe_audio(ctx: &WhisperContext, audio: &[f32]) -> Result<String, Whisp
     params.set_language(Some("en"));
     params.set_translate(false);
     params.set_n_threads(num_cpus());
+    params.set_print_progress(false);
+    params.set_print_realtime(true);
+    params.set_print_timestamps(false);
+    params.set_print_special(false);
+    params.set_suppress_blank(true);
+    params.set_suppress_non_speech_tokens(true);
 
     state.full(params, &audio)?;
     collect_segments(&state)

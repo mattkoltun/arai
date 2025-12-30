@@ -31,10 +31,17 @@ fn main() {
     let (app_event_tx, app_event_rx) = mpsc::channel::<messages::AppEvent>();
 
     let openai_api_key = "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";
+    let agent_prompt = std::env::var("ARAI_AGENT_PROMPT").unwrap_or_else(|_| {
+        "Rewrite the user text for clarity and brevity while preserving meaning.".to_string()
+    });
 
     let recorder = recorder::Recorder::new(audio_tx, app_event_tx.clone());
     let transcriber = transcriber::Transcriber::new(audio_rx, transcript_tx, app_event_tx.clone());
-    let agent = agent::Agent::new(app_event_tx.clone(), openai_api_key.to_string());
+    let agent = agent::Agent::new(
+        app_event_tx.clone(),
+        openai_api_key.to_string(),
+        agent_prompt,
+    );
     let ui = ui::Ui::new(app_event_tx.clone());
     let controller = std::sync::Arc::new(controller::Controller::new(
         recorder,
