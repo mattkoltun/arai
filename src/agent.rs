@@ -12,22 +12,16 @@ const OPENAI_MODEL: &str = "gpt-4o-mini";
 pub struct Agent {
     app_event_tx: AppEventSender,
     api_key: String,
-    instructions: String,
 }
 
 impl Agent {
-    pub fn new(app_event_tx: AppEventSender, api_key: String, instructions: String) -> Self {
-        Self {
-            app_event_tx,
-            api_key,
-            instructions,
-        }
+    pub fn new(app_event_tx: AppEventSender, api_key: String) -> Self {
+        Self { app_event_tx, api_key }
     }
 
-    pub fn submit(&self, text: String) {
+    pub fn submit(&self, instructions: String, text: String) {
         let app_event_tx = self.app_event_tx.clone();
         let api_key = self.api_key.clone();
-        let instructions = self.instructions.clone();
         thread::spawn(move || match call_openai(&api_key, instructions, text) {
             Ok(response) => {
                 let _ = app_event_tx.send(AppEvent {

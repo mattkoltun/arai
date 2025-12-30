@@ -1,5 +1,6 @@
 mod agent;
 mod channels;
+mod config;
 mod controller;
 mod logger;
 mod messages;
@@ -11,16 +12,18 @@ use std::sync::mpsc;
 use std::thread;
 
 fn main() {
-    let mut log_config = logger::LogConfig::default();
-    if let Ok(level) = std::env::var("ARAI_LOG_LEVEL")
-        && let Some(parsed) = logger::parse_level(&level)
-    {
-        log_config.level = parsed;
-    }
-    if let Ok(path) = std::env::var("ARAI_LOG_PATH") {
-        log_config.path = path.into();
-    }
-    if let Err(err) = logger::init_with_config(log_config) {
+    let config = match config::Config::load() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Config error: {err}");
+            return;
+        }
+    };
+
+    if let Err(err) = logger::init_with_config(logger::LogConfig {
+        level: config.log_level,
+        path: config.log_path.clone(),
+    }) {
         eprintln!("Failed to init logger: {err}");
     }
     log::info!("Starting Arai");
@@ -30,18 +33,9 @@ fn main() {
     let (transcript_tx, transcript_rx) = mpsc::channel::<messages::TranscribedOutput>();
     let (app_event_tx, app_event_rx) = mpsc::channel::<messages::AppEvent>();
 
-    let openai_api_key = "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";
-    let agent_prompt = std::env::var("ARAI_AGENT_PROMPT").unwrap_or_else(|_| {
-        "Rewrite the user text for clarity and brevity while preserving meaning.".to_string()
-    });
-
     let recorder = recorder::Recorder::new(audio_tx, app_event_tx.clone());
     let transcriber = transcriber::Transcriber::new(audio_rx, transcript_tx, app_event_tx.clone());
-    let agent = agent::Agent::new(
-        app_event_tx.clone(),
-        openai_api_key.to_string(),
-        agent_prompt,
-    );
+    let agent = agent::Agent::new(app_event_tx.clone(), config.open_api_key.clone());
     let ui = ui::Ui::new(app_event_tx.clone());
     let controller = std::sync::Arc::new(controller::Controller::new(
         recorder,
@@ -49,6 +43,7 @@ fn main() {
         transcript_rx,
         app_event_rx,
         agent,
+        config.agent_instruction(),
         ui.clone(),
     ));
     let controller_shutdown = controller.clone();

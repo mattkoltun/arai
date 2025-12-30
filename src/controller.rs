@@ -18,6 +18,7 @@ pub struct Controller {
     transcript_rx: Mutex<TranscribedReceiver>,
     app_event_rx: Mutex<AppEventReceiver>,
     agent: Agent,
+    agent_instruction: String,
     ui: Ui,
     shutting_down: AtomicBool,
 }
@@ -31,6 +32,7 @@ impl Controller {
         transcript_rx: TranscribedReceiver,
         app_event_rx: AppEventReceiver,
         agent: Agent,
+        agent_instruction: String,
         ui: Ui,
     ) -> Self {
         Self {
@@ -39,6 +41,7 @@ impl Controller {
             transcript_rx: Mutex::new(transcript_rx),
             app_event_rx: Mutex::new(app_event_rx),
             agent,
+            agent_instruction,
             ui,
             shutting_down: AtomicBool::new(false),
         }
@@ -69,7 +72,7 @@ impl Controller {
 
     pub fn submit_text(&self, text: String) {
         debug!("Controller submitting text");
-        self.agent.submit(text);
+        self.agent.submit(self.agent_instruction.clone(), text);
     }
 
     pub fn shutdown(&self) {
