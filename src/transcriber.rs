@@ -1,5 +1,5 @@
-use crate::channels::{AppEventSender, AudioReceiver, TranscribedSender};
-use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk, TranscribedOutput};
+use crate::channels::{AppEventSender, AudioReceiver};
+use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk};
 use log::{debug, error, info};
 use std::thread::{self, JoinHandle};
 use whisper_rs::{
@@ -18,10 +18,9 @@ pub struct Transcriber {
 impl Transcriber {
     pub fn new(
         audio_rx: AudioReceiver,
-        output_tx: TranscribedSender,
         app_event_tx: AppEventSender,
     ) -> Self {
-        let handle = thread::spawn(move || worker(audio_rx, output_tx, app_event_tx));
+        let handle = thread::spawn(move || worker(audio_rx, app_event_tx));
         Self {
             handle: Some(handle),
         }
@@ -36,7 +35,7 @@ impl Drop for Transcriber {
     }
 }
 
-fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender, app_event_tx: AppEventSender) {
+fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender) {
     let ctx = match WhisperContext::new_with_params(MODEL_PATH, WhisperContextParameters::default())
     {
         Ok(c) => c,
@@ -59,13 +58,16 @@ fn worker(audio_rx: AudioReceiver, output_tx: TranscribedSender, app_event_tx: A
         let overlap_samples = (TARGET_SAMPLE_RATE as f32 * OVERLAP_SECONDS) as usize;
         if buffer.len() >= window_samples || chunk.is_final {
             match transcribe_audio(&ctx, &buffer) {
-                Ok(text) => {
-                    if !text.is_empty() {
-                        println!("Transcribed: {}", text);
-                        debug!("Transcription result: {}", text);
-                        let _ = output_tx.send(TranscribedOutput { text });
-                    }
+            Ok(text) => {
+                if !text.is_empty() {
+                    println!("Transcribed: {}", text);
+                    debug!("Transcription result: {}", text);
+                    let _ = app_event_tx.send(AppEvent {
+                        source: AppEventSource::Transcriber,
+                        kind: AppEventKind::Transcription(text),
+                    });
                 }
+            }
                 Err(err) => {
                     error!("Transcription error: {err}");
                     let _ = app_event_tx.send(AppEvent {

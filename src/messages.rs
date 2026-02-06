@@ -7,11 +7,6 @@ pub struct AudioChunk {
     pub is_final: bool,
 }
 
-#[derive(Clone, Debug)]
-pub struct TranscribedOutput {
-    pub text: String,
-}
-
 // #[derive(Clone, Debug)]
 pub enum AppEventSource {
     Recorder,
@@ -26,6 +21,7 @@ pub enum AppEventKind {
     Stopped,
     Error(String),
     Status(String),
+    Transcription(String),
     UiStartListening,
     UiStopListening,
     UiSubmitText(String),

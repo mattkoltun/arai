@@ -1,5 +1,6 @@
 use crate::agent::Agent;
-use crate::channels::{AppEventReceiver, TranscribedReceiver};
+use crate::app_state::AppStateHandle;
+use crate::channels::AppEventReceiver;
 use crate::messages::{AppEventKind, AppEventSource};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
@@ -15,10 +16,10 @@ use std::time::Duration;
 pub struct Controller {
     recorder: Mutex<Option<Recorder>>,
     transcriber: Mutex<Option<Transcriber>>,
-    transcript_rx: Mutex<TranscribedReceiver>,
     app_event_rx: Mutex<AppEventReceiver>,
     agent: Agent,
     agent_instruction: String,
+    app_state: AppStateHandle,
     ui: Ui,
     shutting_down: AtomicBool,
 }
@@ -29,19 +30,19 @@ impl Controller {
     pub fn new(
         recorder: Recorder,
         transcriber: Transcriber,
-        transcript_rx: TranscribedReceiver,
         app_event_rx: AppEventReceiver,
         agent: Agent,
         agent_instruction: String,
+        app_state: AppStateHandle,
         ui: Ui,
     ) -> Self {
         Self {
             recorder: Mutex::new(Some(recorder)),
             transcriber: Mutex::new(Some(transcriber)),
-            transcript_rx: Mutex::new(transcript_rx),
             app_event_rx: Mutex::new(app_event_rx),
             agent,
             agent_instruction,
+            app_state,
             ui,
             shutting_down: AtomicBool::new(false),
         }
@@ -82,14 +83,6 @@ impl Controller {
 
     pub fn run(self: Arc<Self>) {
         while !self.shutting_down.load(Ordering::SeqCst) {
-            if let Ok(rx) = self.transcript_rx.lock() {
-                for line in rx.try_iter() {
-                    debug!("Controller received transcript");
-                    self.ui
-                        .append_to_text_field(format!("{text} ", text = line.text));
-                }
-            }
-
             if let Ok(app_rx) = self.app_event_rx.lock() {
                 for event in app_rx.try_iter() {
                     match (event.source, event.kind) {
@@ -99,6 +92,10 @@ impl Controller {
                         }
                         (AppEventSource::Transcriber, AppEventKind::Error(message)) => {
                             error!("Transcriber event: {message}");
+                        }
+                        (AppEventSource::Transcriber, AppEventKind::Transcription(text)) => {
+                            debug!("Controller received transcript");
+                            self.app_state.append_transcription(&text);
                         }
                         (AppEventSource::Agent, AppEventKind::Error(message)) => {
                             error!("Agent event: {message}");
@@ -126,7 +123,8 @@ impl Controller {
                 }
             }
 
-            self.ui.refresh();
+            let snapshot = self.app_state.snapshot();
+            self.ui.refresh_with_state(snapshot);
             thread::sleep(Duration::from_millis(10));
         }
 

@@ -1,4 +1,5 @@
 mod agent;
+mod app_state;
 mod channels;
 mod config;
 mod controller;
@@ -30,20 +31,20 @@ fn main() {
 
     // Channels
     let (audio_tx, audio_rx) = mpsc::channel::<messages::AudioChunk>();
-    let (transcript_tx, transcript_rx) = mpsc::channel::<messages::TranscribedOutput>();
     let (app_event_tx, app_event_rx) = mpsc::channel::<messages::AppEvent>();
 
     let recorder = recorder::Recorder::new(audio_tx, app_event_tx.clone());
-    let transcriber = transcriber::Transcriber::new(audio_rx, transcript_tx, app_event_tx.clone());
+    let transcriber = transcriber::Transcriber::new(audio_rx, app_event_tx.clone());
     let agent = agent::Agent::new(app_event_tx.clone(), config.open_api_key.clone());
     let ui = ui::Ui::new(app_event_tx.clone());
+    let app_state = app_state::AppState::new();
     let controller = std::sync::Arc::new(controller::Controller::new(
         recorder,
         transcriber,
-        transcript_rx,
         app_event_rx,
         agent,
         config.agent_instruction(),
+        app_state,
         ui.clone(),
     ));
     let controller_shutdown = controller.clone();

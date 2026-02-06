@@ -1,3 +1,4 @@
+use crate::app_state::AppStateSnapshot;
 use crate::channels::AppEventSender;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource};
 use eframe::egui::{self, TextEdit, TopBottomPanel};
@@ -54,18 +55,6 @@ impl Ui {
         )
     }
 
-    pub fn append_to_text_field(&self, text: impl Into<String>) {
-        if let Ok(mut state) = self.state.lock() {
-            let text = text.into();
-            if !state.input.ends_with(' ') && !state.input.is_empty() {
-                state.input.push(' ');
-            }
-            state.input.push_str(&text);
-            state.needs_repaint = true;
-            self.repaint_requested.store(true, Ordering::SeqCst);
-        }
-    }
-
     pub fn submit_processed_text(&self, text: impl Into<String>) {
         if let Ok(mut state) = self.state.lock() {
             let text = text.into();
@@ -77,8 +66,11 @@ impl Ui {
         }
     }
 
-    pub fn refresh(&self) {
+    pub fn refresh_with_state(&self, snapshot: AppStateSnapshot) {
         if let Ok(mut state) = self.state.lock() {
+            if !state.processing {
+                state.input = snapshot.transcribed_text;
+            }
             state.needs_repaint = true;
             self.repaint_requested.store(true, Ordering::SeqCst);
         }
