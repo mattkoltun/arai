@@ -1,12 +1,14 @@
 use crate::app_state::AppStateSnapshot;
 use crate::channels::AppEventSender;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource};
-use eframe::egui::{self, TextEdit, TopBottomPanel};
-use log::{debug, info};
+use iced::widget::{button, column, container, row, scrollable, text, text_editor};
+use iced::{Color, Element, Fill, FillPortion, Subscription, Task, Theme, time};
+use log::debug;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::Duration;
 
 #[derive(Default)]
 struct UiState {
@@ -15,6 +17,15 @@ struct UiState {
     processing: bool,
     listening: bool,
     needs_repaint: bool,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Tick,
+    ToggleListen,
+    Submit,
+    Copy,
+    EditorAction(text_editor::Action),
 }
 
 #[derive(Clone)]
@@ -35,24 +46,25 @@ impl Ui {
         }
     }
 
-    pub fn run(&self) -> eframe::Result<()> {
-        let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_always_on_top()
-                .with_inner_size([420.0, 560.0]),
-            ..Default::default()
-        };
-
+    pub fn run(&self) -> iced::Result {
         let app = self.clone();
 
-        eframe::run_native(
-            "Message Formatter",
-            options,
-            Box::new(move |_cc| {
-                info!("UI initialized");
-                Box::new(app.clone())
-            }),
-        )
+        iced::application("Arai — Message Formatter", update, view)
+            .theme(theme)
+            .subscription(subscription)
+            .window_size((480.0, 620.0))
+            .decorations(true)
+            .resizable(false)
+            .run_with(move || {
+                (
+                    UiRuntime {
+                        ui: app,
+                        editor: text_editor::Content::new(),
+                        status_line: "Ready".to_string(),
+                    },
+                    Task::none(),
+                )
+            })
     }
 
     pub fn submit_processed_text(&self, text: impl Into<String>) {
@@ -106,7 +118,7 @@ impl Ui {
     }
 
     fn submit(&self) {
-        let (should_send, text) = {
+        let text = {
             let mut state = match self.state.lock() {
                 Ok(guard) => guard,
                 Err(_) => return,
@@ -118,129 +130,178 @@ impl Ui {
             state.processed_text = None;
             state.needs_repaint = true;
             self.repaint_requested.store(true, Ordering::SeqCst);
-            (true, state.input.clone())
+            state.input.clone()
         };
 
-        if should_send {
-            debug!("UI submit requested");
-            self.send_event(AppEventKind::UiSubmitText(text));
-        }
+        debug!("UI submit requested");
+        self.send_event(AppEventKind::UiSubmitText(text));
     }
 
-    fn copy_processed(&self, ctx: &egui::Context) {
+    fn copy_processed(&self) -> Option<String> {
         let processed = {
             let state = match self.state.lock() {
                 Ok(guard) => guard,
-                Err(_) => return,
+                Err(_) => return None,
             };
             if state.processing {
-                return;
+                return None;
             }
             state.processed_text.clone()
         };
 
-        if let Some(text) = processed {
+        if processed.is_some() {
             debug!("UI copying processed text");
-            ctx.output_mut(|o| o.copied_text = text.clone());
             self.send_event(AppEventKind::UiShutdown);
+        }
+
+        processed
+    }
+}
+
+struct UiRuntime {
+    ui: Ui,
+    editor: text_editor::Content,
+    status_line: String,
+}
+
+fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
+    match message {
+        Message::Tick => {
+            if state.ui.repaint_requested.swap(false, Ordering::SeqCst)
+                && let Ok(mut ui_state) = state.ui.state.lock()
+            {
+                if ui_state.needs_repaint {
+                    state.editor = text_editor::Content::with_text(&ui_state.input);
+                    ui_state.needs_repaint = false;
+                }
+                state.status_line = if ui_state.processing {
+                    "Submitting…".to_string()
+                } else if ui_state.listening {
+                    "Listening…".to_string()
+                } else {
+                    "Ready".to_string()
+                };
+            }
+            Task::none()
+        }
+        Message::ToggleListen => {
+            state.ui.toggle_listen();
+            Task::none()
+        }
+        Message::Submit => {
+            state.ui.submit();
+            Task::none()
+        }
+        Message::Copy => {
+            if let Some(text) = state.ui.copy_processed() {
+                return iced::clipboard::write::<Message>(text);
+            }
+            Task::none()
+        }
+        Message::EditorAction(action) => {
+            state.editor.perform(action);
+            if let Ok(mut ui_state) = state.ui.state.lock()
+                && !ui_state.processing
+            {
+                ui_state.input = state.editor.text();
+            }
+            Task::none()
         }
     }
 }
 
-impl eframe::App for Ui {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if self.repaint_requested.swap(false, Ordering::SeqCst) {
-            ctx.request_repaint();
-        }
+fn view(state: &UiRuntime) -> Element<'_, Message> {
+    let (listening, processing, has_processed, has_input, char_count) = {
+        let ui_state = state.ui.state.lock().expect("ui state lock");
+        (
+            ui_state.listening,
+            ui_state.processing,
+            ui_state.processed_text.is_some(),
+            !ui_state.input.trim().is_empty(),
+            ui_state.input.chars().count(),
+        )
+    };
 
-        TopBottomPanel::bottom("controls")
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.set_height(72.0);
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    let (listening, processing, has_processed, has_input) = {
-                        let state = self.state.lock().unwrap();
-                        (
-                            state.listening,
-                            state.processing,
-                            state.processed_text.is_some(),
-                            !state.input.trim().is_empty(),
-                        )
-                    };
+    let listen_label = if listening { "Stop" } else { "Listen" };
+    let submit_label = if processing {
+        "Submitting…"
+    } else {
+        "Submit"
+    };
 
-                    let button_size = egui::vec2(120.0, 36.0);
+    let controls = row![
+        button(text(listen_label).size(16))
+            .on_press_maybe((!processing).then_some(Message::ToggleListen))
+            .style(if listening {
+                button::success
+            } else {
+                button::secondary
+            })
+            .padding([10, 18]),
+        button(text(submit_label).size(16))
+            .on_press_maybe((!processing && has_input && !listening).then_some(Message::Submit))
+            .style(button::primary)
+            .padding([10, 18]),
+        button(text("Copy & close").size(16))
+            .on_press_maybe((has_processed && !processing).then_some(Message::Copy))
+            .style(button::secondary)
+            .padding([10, 18])
+    ]
+    .spacing(10)
+    .align_y(iced::alignment::Vertical::Center);
 
-                    let listen_label = if listening {
-                        "Stop Listening"
-                    } else {
-                        "Listen"
-                    };
-                    let listen_response = ui
-                        .add_enabled_ui(!processing, |ui| {
-                            ui.add_sized(
-                                button_size,
-                                egui::SelectableLabel::new(listening, listen_label),
-                            )
-                        })
-                        .inner;
-                    if listen_response.clicked() {
-                        self.toggle_listen();
-                    }
+    let editor = text_editor(&state.editor)
+        .placeholder("Transcribed text will appear here...")
+        .on_action(Message::EditorAction)
+        .padding(14)
+        .size(17);
 
-                    ui.add_space(8.0);
+    let header = row![
+        column![
+            text("ARAI")
+                .size(26)
+                .color(Color::from_rgb8(0xE5, 0xE7, 0xEB)),
+            text("Voice-to-message assistant")
+                .size(14)
+                .color(Color::from_rgb8(0x9C, 0xA3, 0xAF)),
+        ]
+        .spacing(3),
+        container(text(state.status_line.as_str()).size(13))
+            .padding([6, 10])
+            .style(container::rounded_box)
+    ]
+    .spacing(10)
+    .align_y(iced::alignment::Vertical::Center);
 
-                    let process_label = if processing {
-                        "Submitting..."
-                    } else {
-                        "Submit"
-                    };
-                    let process_response = ui.add_enabled(
-                        !processing && has_input && !listening,
-                        egui::Button::new(process_label).min_size(button_size),
-                    );
-                    if process_response.clicked() {
-                        self.submit();
-                    }
-                    if processing {
-                        let mut overlay = ui.child_ui(
-                            process_response.rect,
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                        );
-                        overlay.add(egui::Spinner::new());
-                    }
+    let content = column![
+        header,
+        container(scrollable(editor).height(FillPortion(8)))
+            .padding(2)
+            .style(container::rounded_box),
+        row![
+            text(format!("{} chars", char_count))
+                .size(13)
+                .color(Color::from_rgb8(0x9C, 0xA3, 0xAF)),
+            controls
+        ]
+        .spacing(12)
+        .align_y(iced::alignment::Vertical::Center)
+    ]
+    .spacing(14)
+    .padding(18)
+    .height(Fill);
 
-                    ui.add_space(8.0);
+    container(content)
+        .width(Fill)
+        .height(Fill)
+        .style(container::dark)
+        .into()
+}
 
-                    let copy_enabled = has_processed && !processing;
-                    if ui
-                        .add_enabled(
-                            copy_enabled,
-                            egui::Button::new("Copy").min_size(button_size),
-                        )
-                        .clicked()
-                    {
-                        self.copy_processed(ctx);
-                    }
-                });
-            });
+fn subscription(_state: &UiRuntime) -> Subscription<Message> {
+    time::every(Duration::from_millis(16)).map(|_| Message::Tick)
+}
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let mut state = self.state.lock().unwrap();
-            let available = ui.available_size();
-            ui.add_enabled_ui(!state.processing, |ui| {
-                ui.add_sized(
-                    available,
-                    TextEdit::multiline(&mut state.input)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(16)
-                        .hint_text("Transcribed text will appear here..."),
-                );
-            });
-        });
-    }
-
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        info!("UI exit requested");
-        self.send_event(AppEventKind::UiShutdown);
-    }
+fn theme(_state: &UiRuntime) -> Theme {
+    Theme::TokyoNight
 }
