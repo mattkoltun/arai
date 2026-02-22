@@ -24,8 +24,6 @@ pub struct Controller {
     shutting_down: AtomicBool,
 }
 
-pub type ControllerHandle = Arc<Controller>;
-
 impl Controller {
     pub fn new(
         recorder: Recorder,

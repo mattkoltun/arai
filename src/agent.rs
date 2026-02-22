@@ -16,7 +16,10 @@ pub struct Agent {
 
 impl Agent {
     pub fn new(app_event_tx: AppEventSender, api_key: String) -> Self {
-        Self { app_event_tx, api_key }
+        Self {
+            app_event_tx,
+            api_key,
+        }
     }
 
     pub fn submit(&self, instructions: String, text: String) {
@@ -39,7 +42,11 @@ impl Agent {
     }
 }
 
-fn call_openai(api_key: &str, instructions: String, text: String) -> Result<String, reqwest::Error> {
+fn call_openai(
+    api_key: &str,
+    instructions: String,
+    text: String,
+) -> Result<String, reqwest::Error> {
     debug!("Agent submitting text to OpenAI");
     let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
 
@@ -66,10 +73,10 @@ fn extract_output_text(response: &Value) -> String {
         for item in output {
             if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
                 for block in content {
-                    if block.get("type").and_then(|v| v.as_str()) == Some("output_text") {
-                        if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                            return text.trim().to_string();
-                        }
+                    if block.get("type").and_then(|v| v.as_str()) == Some("output_text")
+                        && let Some(text) = block.get("text").and_then(|v| v.as_str())
+                    {
+                        return text.trim().to_string();
                     }
                 }
             }

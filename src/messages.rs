@@ -17,10 +17,8 @@ pub enum AppEventSource {
 
 #[derive(Clone, Debug)]
 pub enum AppEventKind {
-    Started,
     Stopped,
     Error(String),
-    Status(String),
     Transcription(String),
     UiStartListening,
     UiStopListening,

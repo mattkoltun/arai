@@ -16,10 +16,7 @@ pub struct Transcriber {
 }
 
 impl Transcriber {
-    pub fn new(
-        audio_rx: AudioReceiver,
-        app_event_tx: AppEventSender,
-    ) -> Self {
+    pub fn new(audio_rx: AudioReceiver, app_event_tx: AppEventSender) -> Self {
         let handle = thread::spawn(move || worker(audio_rx, app_event_tx));
         Self {
             handle: Some(handle),
@@ -58,16 +55,16 @@ fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender) {
         let overlap_samples = (TARGET_SAMPLE_RATE as f32 * OVERLAP_SECONDS) as usize;
         if buffer.len() >= window_samples || chunk.is_final {
             match transcribe_audio(&ctx, &buffer) {
-            Ok(text) => {
-                if !text.is_empty() {
-                    println!("Transcribed: {}", text);
-                    debug!("Transcription result: {}", text);
-                    let _ = app_event_tx.send(AppEvent {
-                        source: AppEventSource::Transcriber,
-                        kind: AppEventKind::Transcription(text),
-                    });
+                Ok(text) => {
+                    if !text.is_empty() {
+                        println!("Transcribed: {}", text);
+                        debug!("Transcription result: {}", text);
+                        let _ = app_event_tx.send(AppEvent {
+                            source: AppEventSource::Transcriber,
+                            kind: AppEventKind::Transcription(text),
+                        });
+                    }
                 }
-            }
                 Err(err) => {
                     error!("Transcription error: {err}");
                     let _ = app_event_tx.send(AppEvent {
@@ -100,7 +97,7 @@ fn transcribe_audio(ctx: &WhisperContext, audio: &[f32]) -> Result<String, Whisp
     params.set_suppress_blank(true);
     params.set_suppress_non_speech_tokens(true);
 
-    state.full(params, &audio)?;
+    state.full(params, audio)?;
     collect_segments(&state)
 }
 

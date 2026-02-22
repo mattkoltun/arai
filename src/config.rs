@@ -10,7 +10,6 @@ const DEFAULT_AGENT_PROMPT: &str =
 pub enum ConfigError {
     MissingHome,
     InvalidLogLevel(String),
-    InvalidAgentPrompts(String),
     MissingApiKey,
     EmptyAgentPrompts,
     EmptyAgentPromptName,
@@ -24,7 +23,6 @@ impl std::fmt::Display for ConfigError {
         match self {
             ConfigError::MissingHome => write!(f, "HOME is not set"),
             ConfigError::InvalidLogLevel(value) => write!(f, "invalid log_level: {value}"),
-            ConfigError::InvalidAgentPrompts(message) => write!(f, "agent_prompts: {message}"),
             ConfigError::MissingApiKey => write!(f, "open_api_key is missing"),
             ConfigError::EmptyAgentPrompts => write!(f, "agent_prompts cannot be empty"),
             ConfigError::EmptyAgentPromptName => write!(f, "agent_prompt name cannot be empty"),
@@ -142,8 +140,7 @@ fn config_path() -> Result<PathBuf, ConfigError> {
 
 fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
     let log_level = match partial.log_level {
-        Some(value) => logger::parse_level(&value)
-            .ok_or( ConfigError::InvalidLogLevel(value))?,
+        Some(value) => logger::parse_level(&value).ok_or(ConfigError::InvalidLogLevel(value))?,
         None => logger::LogConfig::default().level,
     };
     let log_path = partial
