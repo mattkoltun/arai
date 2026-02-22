@@ -67,3 +67,20 @@ pub fn parse_level(value: &str) -> Option<LevelFilter> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_common_aliases() {
+        assert_eq!(parse_level("verbose"), Some(LevelFilter::Trace));
+        assert_eq!(parse_level(" warning "), Some(LevelFilter::Warn));
+        assert_eq!(parse_level("OFF"), Some(LevelFilter::Off));
+    }
+
+    #[test]
+    fn rejects_unknown_level() {
+        assert_eq!(parse_level("loud"), None);
+    }
+}

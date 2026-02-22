@@ -161,3 +161,42 @@ fn resample_to_mono_16k(chunk: &AudioChunk) -> Vec<f32> {
 
     output
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(samples: Vec<i16>, channels: u16, sample_rate: u32) -> AudioChunk {
+        AudioChunk {
+            samples,
+            channels,
+            sample_rate,
+            is_final: false,
+        }
+    }
+
+    #[test]
+    fn converts_stereo_to_mono_average() {
+        let audio = chunk(vec![32767, -32767, 32767, 32767], 2, TARGET_SAMPLE_RATE);
+        let mono = resample_to_mono_16k(&audio);
+
+        assert_eq!(mono.len(), 2);
+        assert!((mono[0] - 0.0).abs() < 0.01);
+        assert!((mono[1] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn resamples_to_target_sample_rate() {
+        let audio = chunk(vec![0, 16384, 32767, 0], 1, 8_000);
+        let output = resample_to_mono_16k(&audio);
+
+        assert_eq!(output.len(), 8);
+    }
+
+    #[test]
+    fn empty_input_returns_empty_output() {
+        let audio = chunk(vec![], 1, 48_000);
+        let output = resample_to_mono_16k(&audio);
+        assert!(output.is_empty());
+    }
+}

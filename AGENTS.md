@@ -21,6 +21,14 @@
 - Write unit tests alongside code in the same file using `#[cfg(test)]`; use `tests/` for integration tests that exercise binaries end-to-end.
 - Name tests with behavior-first labels (e.g., `handles_empty_input`, `parses_config_file`).
 - Aim for meaningful coverage of edge cases and error paths; avoid hidden global state in tests.
+- For fast targeted checks, run module tests directly:
+  - `cargo test agent::tests`
+  - `cargo test app_state::tests`
+  - `cargo test config::tests`
+  - `cargo test logger::tests`
+  - `cargo test transcriber::tests`
+  - `cargo test stdin_listener::tests`
+- UI layout/components and microphone-recorder specific behavior are out of scope for routine unit tests in this project.
 
 ## Commit & Pull Request Guidelines
 - Use clear, present-tense commit messages; Conventional Commits are preferred (`feat: add config loader`, `fix: handle empty args`).
