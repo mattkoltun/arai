@@ -173,3 +173,62 @@ fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
         agent_prompts,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_partial() -> PartialConfig {
+        PartialConfig {
+            log_level: Some("info".to_string()),
+            log_path: Some("/tmp/arai-test.log".to_string()),
+            open_api_key: Some("test-key".to_string()),
+            agent_prompts: Some(vec![AgentPrompt {
+                name: "default".to_string(),
+                instruction: "rewrite".to_string(),
+            }]),
+        }
+    }
+
+    #[test]
+    fn builds_config_from_valid_partial() {
+        let cfg = from_partial(valid_partial()).expect("valid config should parse");
+        assert_eq!(cfg.log_level, LevelFilter::Info);
+        assert_eq!(cfg.log_path, PathBuf::from("/tmp/arai-test.log"));
+        assert_eq!(cfg.open_api_key, "test-key");
+        assert_eq!(cfg.agent_instruction(), "rewrite");
+    }
+
+    #[test]
+    fn rejects_missing_api_key() {
+        let mut partial = valid_partial();
+        partial.open_api_key = Some("   ".to_string());
+        assert!(matches!(
+            from_partial(partial),
+            Err(ConfigError::MissingApiKey)
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_prompt_name_or_instruction() {
+        let mut bad_name = valid_partial();
+        bad_name.agent_prompts = Some(vec![AgentPrompt {
+            name: " ".to_string(),
+            instruction: "ok".to_string(),
+        }]);
+        assert!(matches!(
+            from_partial(bad_name),
+            Err(ConfigError::EmptyAgentPromptName)
+        ));
+
+        let mut bad_instruction = valid_partial();
+        bad_instruction.agent_prompts = Some(vec![AgentPrompt {
+            name: "default".to_string(),
+            instruction: " ".to_string(),
+        }]);
+        assert!(matches!(
+            from_partial(bad_instruction),
+            Err(ConfigError::EmptyAgentPromptInstruction)
+        ));
+    }
+}

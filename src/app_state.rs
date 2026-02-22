@@ -37,3 +37,26 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn appends_with_spaces_between_chunks() {
+        let state = AppState::default();
+        state.append_transcription("hello");
+        state.append_transcription("world");
+
+        assert_eq!(state.snapshot().transcribed_text, "hello world");
+    }
+
+    #[test]
+    fn does_not_add_extra_space_when_existing_chunk_already_ends_with_space() {
+        let state = AppState::default();
+        state.append_transcription("hello ");
+        state.append_transcription("world");
+
+        assert_eq!(state.snapshot().transcribed_text, "hello world");
+    }
+}

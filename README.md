@@ -45,6 +45,10 @@ That means you can control the style and target of each transformation, for exam
 
 You speak once, and ARAI adapts the transformed output to your selected style.
 
+## Development
+
+For local setup, build, and testing instructions, see [DEVELOPMENT.md](./DEVELOPMENT.md).
+
 ## Summary
 
 ARAI is a practical workflow accelerator:
