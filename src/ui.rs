@@ -2,10 +2,15 @@ use crate::app_state::AppStateSnapshot;
 use crate::channels::AppEventSender;
 use crate::config::{AgentPrompt, TranscriberConfig};
 use crate::messages::{AppEvent, AppEventKind, AppEventSource};
+use iced::font::Family;
+use iced::theme::Palette;
 use iced::widget::{
     Column, button, column, container, row, scrollable, text, text_editor, text_input,
 };
-use iced::{Color, Element, Fill, FillPortion, Subscription, Task, Theme, time};
+use iced::{
+    Background, Border, Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme,
+    keyboard, time,
+};
 use log::debug;
 use std::sync::{
     Arc, Mutex,
@@ -13,9 +18,250 @@ use std::sync::{
 };
 use std::time::Duration;
 
+// ── Palette constants ────────────────────────────────────────────────
+const BG: Color = Color::from_rgb(0.082, 0.090, 0.118); // #151724 dark graphite-blue
+const SURFACE: Color = Color::from_rgb(0.118, 0.125, 0.157); // #1E2028 slightly lighter
+const MUTED: Color = Color::from_rgb(0.400, 0.420, 0.490); // #66697D blue-grey
+const TEXT_COLOR: Color = Color::from_rgb(0.847, 0.855, 0.894); // #D8DAE4 light
+const PINK: Color = Color::from_rgb(0.976, 0.361, 0.576); // #F95C93 pastel pink
+const GREEN: Color = Color::from_rgb(0.651, 0.886, 0.180); // #A6E22E
+const RED: Color = Color::from_rgb(0.976, 0.149, 0.447); // #F92672
+
+// ── Font constants ───────────────────────────────────────────────────
+const ICONS: Font = Font {
+    family: Family::Name("Material Icons"),
+    weight: iced::font::Weight::Normal,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Normal,
+};
+
+// Icon helper — uses Material Icons font, Basic shaping for PUA codepoints
+fn icon(codepoint: char, size: f32) -> iced::widget::Text<'static> {
+    text(codepoint.to_string())
+        .font(ICONS)
+        .size(size)
+        .shaping(text::Shaping::Basic)
+}
+
+// ── Style: icon button — fully transparent, icon glows on hover ──────
+fn icon_btn(_theme: &Theme, status: button::Status) -> button::Style {
+    let text_color = match status {
+        button::Status::Hovered => PINK,
+        button::Status::Pressed => Color::from_rgb(0.85, 0.25, 0.44),
+        button::Status::Disabled => Color::from_rgb(0.25, 0.26, 0.30),
+        _ => MUTED,
+    };
+    button::Style {
+        text_color,
+        background: None,
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        shadow: Default::default(),
+    }
+}
+
+// Icon button when "active" (e.g. listening) — glows green
+fn icon_btn_active(_theme: &Theme, status: button::Status) -> button::Style {
+    let text_color = match status {
+        button::Status::Hovered => Color::from_rgb(0.75, 0.95, 0.35),
+        button::Status::Pressed => Color::from_rgb(0.55, 0.75, 0.12),
+        _ => GREEN,
+    };
+    button::Style {
+        text_color,
+        background: None,
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        shadow: Default::default(),
+    }
+}
+
+fn icon_btn_danger(_theme: &Theme, status: button::Status) -> button::Style {
+    let text_color = match status {
+        button::Status::Hovered => PINK,
+        button::Status::Pressed => Color::from_rgb(0.85, 0.10, 0.35),
+        _ => RED,
+    };
+    button::Style {
+        text_color,
+        background: None,
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        shadow: Default::default(),
+    }
+}
+
+// ── Style: containers ────────────────────────────────────────────────
+fn bg_container(_theme: &Theme) -> container::Style {
+    container::Style {
+        text_color: None,
+        background: Some(Background::Color(BG)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        shadow: Default::default(),
+    }
+}
+
+fn surface_container(_theme: &Theme) -> container::Style {
+    container::Style {
+        text_color: None,
+        background: Some(Background::Color(SURFACE)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 10.0.into(),
+        },
+        shadow: Default::default(),
+    }
+}
+
+// ── Style: primary filled button (Save) ──────────────────────────────
+fn primary_btn(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(1.0, 0.43, 0.63),
+        button::Status::Pressed => Color::from_rgb(0.85, 0.25, 0.44),
+        _ => PINK,
+    };
+    button::Style {
+        text_color: Color::WHITE,
+        background: Some(Background::Color(bg)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 8.0.into(),
+        },
+        shadow: Default::default(),
+    }
+}
+
+// Ghost button for config items (add prompt, etc)
+fn ghost_btn(_theme: &Theme, status: button::Status) -> button::Style {
+    let (bg, text_color) = match status {
+        button::Status::Hovered => (Color::from_rgba(0.976, 0.361, 0.576, 0.12), TEXT_COLOR),
+        button::Status::Pressed => (Color::from_rgba(0.976, 0.361, 0.576, 0.22), TEXT_COLOR),
+        button::Status::Disabled => (Color::TRANSPARENT, Color::from_rgb(0.25, 0.26, 0.30)),
+        _ => (Color::TRANSPARENT, MUTED),
+    };
+    button::Style {
+        text_color,
+        background: Some(Background::Color(bg)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 8.0.into(),
+        },
+        shadow: Default::default(),
+    }
+}
+
+// ── Style: tab buttons ───────────────────────────────────────────────
+fn tab_btn_active(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgb(1.0, 0.43, 0.63),
+        button::Status::Pressed => Color::from_rgb(0.85, 0.25, 0.44),
+        _ => PINK,
+    };
+    button::Style {
+        text_color: Color::WHITE,
+        background: Some(Background::Color(bg)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 6.0.into(),
+        },
+        shadow: Default::default(),
+    }
+}
+
+fn tab_btn_inactive(_theme: &Theme, status: button::Status) -> button::Style {
+    let (bg, text_color) = match status {
+        button::Status::Hovered => (Color::from_rgba(0.976, 0.361, 0.576, 0.10), TEXT_COLOR),
+        button::Status::Pressed => (Color::from_rgba(0.976, 0.361, 0.576, 0.20), TEXT_COLOR),
+        _ => (Color::TRANSPARENT, MUTED),
+    };
+    button::Style {
+        text_color,
+        background: Some(Background::Color(bg)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 6.0.into(),
+        },
+        shadow: Default::default(),
+    }
+}
+
+// ── Style: text input / editor ───────────────────────────────────────
+fn borderless_input(_theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let border_color = match status {
+        text_input::Status::Focused => PINK,
+        _ => Color::TRANSPARENT,
+    };
+    text_input::Style {
+        background: Background::Color(SURFACE),
+        border: Border {
+            color: border_color,
+            width: if matches!(status, text_input::Status::Focused) {
+                1.0
+            } else {
+                0.0
+            },
+            radius: 8.0.into(),
+        },
+        icon: MUTED,
+        placeholder: MUTED,
+        value: TEXT_COLOR,
+        selection: Color::from_rgba(0.976, 0.361, 0.576, 0.3),
+    }
+}
+
+fn borderless_editor(_theme: &Theme, status: text_editor::Status) -> text_editor::Style {
+    let border_color = match status {
+        text_editor::Status::Focused => PINK,
+        _ => Color::TRANSPARENT,
+    };
+    text_editor::Style {
+        background: Background::Color(SURFACE),
+        border: Border {
+            color: border_color,
+            width: if matches!(status, text_editor::Status::Focused) {
+                1.0
+            } else {
+                0.0
+            },
+            radius: 8.0.into(),
+        },
+        icon: MUTED,
+        placeholder: MUTED,
+        value: TEXT_COLOR,
+        selection: Color::from_rgba(0.976, 0.361, 0.576, 0.3),
+    }
+}
+
+// ── Config tab enum ──────────────────────────────────────────────────
+#[derive(Clone, Debug, Default, PartialEq)]
+enum ConfigTab {
+    #[default]
+    Setup,
+    Instructions,
+    Advanced,
+}
+
 const MAX_PROMPTS: usize = 10;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct PromptEntry {
     name: String,
     instruction: String,
@@ -34,29 +280,10 @@ struct UiState {
     config_model_path: String,
     config_window_seconds: String,
     config_overlap_seconds: String,
+    config_tab: ConfigTab,
     snapshot_prompts: Vec<AgentPrompt>,
     snapshot_default: usize,
     snapshot_transcriber: Option<TranscriberConfig>,
-}
-
-#[derive(Debug, Clone)]
-enum Message {
-    Tick,
-    ToggleListen,
-    Submit,
-    Copy,
-    EditorAction(text_editor::Action),
-    OpenConfig,
-    CloseConfig,
-    SaveConfig,
-    AddPrompt,
-    RemovePrompt(usize),
-    SetDefaultPrompt(usize),
-    PromptNameChanged(usize, String),
-    PromptInstructionChanged(usize, String),
-    ModelPathChanged(String),
-    WindowSecondsChanged(String),
-    OverlapSecondsChanged(String),
 }
 
 #[derive(Clone)]
@@ -80,18 +307,23 @@ impl Ui {
     pub fn run(&self) -> iced::Result {
         let app = self.clone();
 
-        iced::application("Arai — Message Formatter", update, view)
+        iced::application("Arai", update, view)
             .theme(theme)
             .subscription(subscription)
             .window_size((480.0, 620.0))
-            .decorations(true)
+            .decorations(false)
             .resizable(false)
+            .font(include_bytes!("../assets/fonts/MaterialIcons-Regular.ttf").as_slice())
+            .font(include_bytes!("../assets/fonts/Inter-Regular.ttf").as_slice())
+            // NOTE: no .default_font() — let iced use its built-in sans-serif
+            // so that Material Icons can fall through correctly
             .run_with(move || {
                 (
                     UiRuntime {
                         ui: app,
                         editor: text_editor::Content::new(),
                         status_line: "Ready".to_string(),
+                        instruction_editors: Vec::new(),
                     },
                     Task::none(),
                 )
@@ -196,6 +428,29 @@ struct UiRuntime {
     ui: Ui,
     editor: text_editor::Content,
     status_line: String,
+    instruction_editors: Vec<text_editor::Content>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Tick,
+    EditorAction(text_editor::Action),
+    ToggleListen,
+    Submit,
+    Copy,
+    OpenConfig,
+    CloseConfig,
+    SaveConfig,
+    AddPrompt,
+    RemovePrompt(usize),
+    SetDefaultPrompt(usize),
+    PromptNameChanged(usize, String),
+    PromptInstructionAction(usize, text_editor::Action),
+    ModelPathChanged(String),
+    WindowSecondsChanged(String),
+    OverlapSecondsChanged(String),
+    SwitchConfigTab(ConfigTab),
+    KeyPressed(keyboard::Key, keyboard::Modifiers),
 }
 
 fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
@@ -211,12 +466,21 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     ui_state.needs_repaint = false;
                 }
                 state.status_line = if ui_state.processing {
-                    "Submitting…".to_string()
+                    "Processing...".to_string()
                 } else if ui_state.listening {
-                    "Listening…".to_string()
+                    "Listening...".to_string()
                 } else {
                     "Ready".to_string()
                 };
+            }
+            Task::none()
+        }
+        Message::EditorAction(action) => {
+            state.editor.perform(action);
+            if let Ok(mut ui_state) = state.ui.state.lock()
+                && !ui_state.processing
+            {
+                ui_state.input = state.editor.text();
             }
             Task::none()
         }
@@ -231,15 +495,6 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         Message::Copy => {
             if let Some(text) = state.ui.copy_processed() {
                 return iced::clipboard::write::<Message>(text);
-            }
-            Task::none()
-        }
-        Message::EditorAction(action) => {
-            state.editor.perform(action);
-            if let Ok(mut ui_state) = state.ui.state.lock()
-                && !ui_state.processing
-            {
-                ui_state.input = state.editor.text();
             }
             Task::none()
         }
@@ -258,7 +513,14 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 ui_state.config_model_path = tc.model_path;
                 ui_state.config_window_seconds = tc.window_seconds.to_string();
                 ui_state.config_overlap_seconds = tc.overlap_seconds.to_string();
+                ui_state.config_tab = ConfigTab::Setup;
                 ui_state.config_open = true;
+
+                state.instruction_editors = ui_state
+                    .config_prompts
+                    .iter()
+                    .map(|p| text_editor::Content::with_text(&p.instruction))
+                    .collect();
             }
             Task::none()
         }
@@ -270,6 +532,12 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::SaveConfig => {
             if let Ok(mut ui_state) = state.ui.state.lock() {
+                for (i, editor) in state.instruction_editors.iter().enumerate() {
+                    if i < ui_state.config_prompts.len() {
+                        ui_state.config_prompts[i].instruction = editor.text();
+                    }
+                }
+
                 let prompts: Vec<AgentPrompt> = ui_state
                     .config_prompts
                     .iter()
@@ -318,10 +586,12 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             if let Ok(mut ui_state) = state.ui.state.lock()
                 && ui_state.config_prompts.len() < MAX_PROMPTS
             {
+                let next_num = ui_state.config_prompts.len() + 1;
                 ui_state.config_prompts.push(PromptEntry {
-                    name: String::new(),
+                    name: format!("Prompt {}", next_num),
                     instruction: String::new(),
                 });
+                state.instruction_editors.push(text_editor::Content::new());
             }
             Task::none()
         }
@@ -331,6 +601,8 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 && idx < ui_state.config_prompts.len()
             {
                 ui_state.config_prompts.remove(idx);
+                state.instruction_editors.remove(idx);
+
                 if ui_state.config_default >= ui_state.config_prompts.len() {
                     ui_state.config_default = 0;
                 } else if ui_state.config_default > idx {
@@ -357,11 +629,16 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::PromptInstructionChanged(idx, value) => {
-            if let Ok(mut ui_state) = state.ui.state.lock()
-                && let Some(entry) = ui_state.config_prompts.get_mut(idx)
-            {
-                entry.instruction = value;
+        Message::PromptInstructionAction(idx, action) => {
+            if idx < state.instruction_editors.len() {
+                state.instruction_editors[idx].perform(action);
+
+                if let Ok(mut ui_state) = state.ui.state.lock()
+                    && idx < ui_state.config_prompts.len()
+                {
+                    ui_state.config_prompts[idx].instruction =
+                        state.instruction_editors[idx].text();
+                }
             }
             Task::none()
         }
@@ -383,293 +660,365 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::SwitchConfigTab(tab) => {
+            if let Ok(mut ui_state) = state.ui.state.lock() {
+                ui_state.config_tab = tab;
+            }
+            Task::none()
+        }
+        Message::KeyPressed(key, modifiers) => match key {
+            keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.command() => {
+                state.ui.submit();
+                Task::none()
+            }
+            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                if let Ok(mut ui_state) = state.ui.state.lock()
+                    && ui_state.config_open
+                {
+                    ui_state.config_open = false;
+                }
+                Task::none()
+            }
+            _ => Task::none(),
+        },
     }
 }
+
+// ── Views ────────────────────────────────────────────────────────────
 
 fn view(state: &UiRuntime) -> Element<'_, Message> {
     let ui_state = state.ui.state.lock().expect("ui state lock");
 
     if ui_state.config_open {
-        let prompts: Vec<PromptEntry> = ui_state.config_prompts.clone();
-        let default = ui_state.config_default;
+        let prompts = ui_state.config_prompts.clone();
+        let config_default = ui_state.config_default;
         let model_path = ui_state.config_model_path.clone();
         let window_secs = ui_state.config_window_seconds.clone();
         let overlap_secs = ui_state.config_overlap_seconds.clone();
+        let config_tab = ui_state.config_tab.clone();
         drop(ui_state);
-        return view_config(prompts, default, model_path, window_secs, overlap_secs);
+        return view_config(
+            state,
+            prompts,
+            config_default,
+            model_path,
+            window_secs,
+            overlap_secs,
+            config_tab,
+        );
     }
 
-    let (listening, processing, has_processed, has_input, char_count) = (
+    let (listening, processing, has_processed, char_count) = (
         ui_state.listening,
         ui_state.processing,
         ui_state.processed_text.is_some(),
-        !ui_state.input.trim().is_empty(),
         ui_state.input.chars().count(),
     );
     drop(ui_state);
 
-    let listen_label = if listening { "Stop" } else { "Listen" };
-    let submit_label = if processing {
-        "Submitting…"
+    view_main(state, listening, processing, has_processed, char_count)
+}
+
+fn view_main<'a>(
+    state: &'a UiRuntime,
+    listening: bool,
+    processing: bool,
+    has_processed: bool,
+    char_count: usize,
+) -> Element<'a, Message> {
+    let editor_area = text_editor(&state.editor)
+        .style(borderless_editor)
+        .padding(16)
+        .on_action(Message::EditorAction)
+        .height(Fill);
+
+    let char_count_text = text(format!("{} chars", char_count)).size(12).color(MUTED);
+
+    // mic: E029=mic, E02B=mic_off
+    let mic_btn = if listening {
+        button(icon('\u{E02B}', 22.0))
+            .style(icon_btn_active)
+            .padding([8, 12])
+            .on_press_maybe((!processing).then_some(Message::ToggleListen))
     } else {
-        "Submit"
+        button(icon('\u{E029}', 22.0))
+            .style(icon_btn)
+            .padding([8, 12])
+            .on_press_maybe((!processing).then_some(Message::ToggleListen))
     };
 
-    let controls = row![
-        button(text(listen_label).size(16))
-            .on_press_maybe((!processing).then_some(Message::ToggleListen))
-            .style(if listening {
-                button::success
-            } else {
-                button::secondary
-            })
-            .padding([10, 18]),
-        button(text(submit_label).size(16))
-            .on_press_maybe((!processing && has_input && !listening).then_some(Message::Submit))
-            .style(button::primary)
-            .padding([10, 18]),
-        button(text("Copy & close").size(16))
-            .on_press_maybe((has_processed && !processing).then_some(Message::Copy))
-            .style(button::secondary)
-            .padding([10, 18])
-    ]
-    .spacing(10)
-    .align_y(iced::alignment::Vertical::Center);
+    // send: E163
+    let send_btn = if processing {
+        button(text("...").size(14).color(MUTED))
+            .style(icon_btn)
+            .padding([8, 12])
+    } else {
+        button(icon('\u{E163}', 22.0))
+            .style(icon_btn)
+            .padding([8, 12])
+            .on_press(Message::Submit)
+    };
 
-    let editor = text_editor(&state.editor)
-        .placeholder("Transcribed text will appear here...")
-        .on_action(Message::EditorAction)
-        .padding(14)
-        .size(17);
+    // copy: E14D
+    let copy_btn = button(icon('\u{E14D}', 22.0))
+        .style(icon_btn)
+        .padding([8, 12])
+        .on_press_maybe((has_processed && !processing).then_some(Message::Copy));
 
-    let header = row![
-        column![
-            text("ARAI")
-                .size(26)
-                .color(Color::from_rgb8(0xE5, 0xE7, 0xEB)),
-            text("Voice-to-message assistant")
-                .size(14)
-                .color(Color::from_rgb8(0x9C, 0xA3, 0xAF)),
-        ]
-        .spacing(3),
-        container(text(state.status_line.as_str()).size(13))
-            .padding([6, 10])
-            .style(container::rounded_box),
-        container(
-            button(text("\u{2699}").size(20))
-                .on_press(Message::OpenConfig)
-                .style(button::text)
-                .padding([4, 8])
-        )
-        .align_right(Fill)
+    // settings: E8B8
+    let settings_btn = button(icon('\u{E8B8}', 22.0))
+        .style(icon_btn)
+        .padding([8, 12])
+        .on_press(Message::OpenConfig);
+
+    let button_group = row![mic_btn, send_btn, copy_btn, settings_btn]
+        .spacing(16)
+        .align_y(iced::Alignment::Center);
+
+    let bottom_bar = column![
+        container(button_group).center_x(Fill),
+        container(char_count_text).padding([4, 18])
     ]
-    .spacing(10)
-    .align_y(iced::alignment::Vertical::Center);
+    .spacing(6);
 
     let content = column![
-        header,
-        container(scrollable(editor).height(FillPortion(8)))
-            .padding(2)
-            .style(container::rounded_box),
-        row![
-            text(format!("{} chars", char_count))
-                .size(13)
-                .color(Color::from_rgb8(0x9C, 0xA3, 0xAF)),
-            controls
-        ]
-        .spacing(12)
-        .align_y(iced::alignment::Vertical::Center)
+        container(editor_area)
+            .style(surface_container)
+            .padding(4)
+            .height(FillPortion(8)),
+        container(bottom_bar).height(FillPortion(2))
     ]
-    .spacing(14)
-    .padding(18)
-    .height(Fill);
+    .spacing(8)
+    .padding(14);
 
     container(content)
+        .style(bg_container)
         .width(Fill)
         .height(Fill)
-        .style(container::dark)
         .into()
 }
 
-fn view_config(
+fn view_config<'a>(
+    state: &'a UiRuntime,
     prompts: Vec<PromptEntry>,
     config_default: usize,
     model_path: String,
     window_secs: String,
     overlap_secs: String,
-) -> Element<'static, Message> {
-    let title = row![
-        text("Settings")
-            .size(22)
-            .color(Color::from_rgb8(0xE5, 0xE7, 0xEB)),
-        container(
-            button(text("\u{2715}").size(18))
-                .on_press(Message::CloseConfig)
-                .style(button::text)
-                .padding([4, 8])
-        )
-        .align_right(Fill)
-    ]
-    .align_y(iced::alignment::Vertical::Center);
-
-    let prompt_count = prompts.len();
-    let mut prompts_col = Column::new().spacing(12);
-
-    for (idx, entry) in prompts.iter().enumerate() {
-        let is_default = idx == config_default;
-
-        let default_btn = button(
-            text(if is_default { "\u{25C9}" } else { "\u{25CB}" })
-                .size(18)
-                .color(if is_default {
-                    Color::from_rgb8(0x7A, 0xA2, 0xF7)
-                } else {
-                    Color::from_rgb8(0x9C, 0xA3, 0xAF)
-                }),
-        )
-        .on_press(Message::SetDefaultPrompt(idx))
-        .style(button::text)
-        .padding([2, 4]);
-
-        let name_input = text_input("Prompt name", &entry.name)
-            .on_input(move |v| Message::PromptNameChanged(idx, v))
-            .size(15)
-            .padding(8);
-
-        let instruction_input =
-            text_input("Instructions (multi-line supported)", &entry.instruction)
-                .on_input(move |v| Message::PromptInstructionChanged(idx, v))
-                .size(14)
-                .padding(8);
-
-        let remove_btn = if prompt_count > 1 {
-            button(text("\u{2212}").size(16))
-                .on_press(Message::RemovePrompt(idx))
-                .style(button::danger)
-                .padding([4, 8])
+    config_tab: ConfigTab,
+) -> Element<'a, Message> {
+    let setup_btn = button(text("Setup").size(13))
+        .style(if config_tab == ConfigTab::Setup {
+            tab_btn_active
         } else {
-            button(text("\u{2212}").size(16))
-                .style(button::secondary)
-                .padding([4, 8])
-        };
+            tab_btn_inactive
+        })
+        .padding([6, 14])
+        .on_press(Message::SwitchConfigTab(ConfigTab::Setup));
 
-        let header_row = row![
-            default_btn,
-            text(if is_default { "Default" } else { "" })
-                .size(12)
-                .color(Color::from_rgb8(0x7A, 0xA2, 0xF7)),
-            container(remove_btn).align_right(Fill),
+    let instructions_btn = button(text("Instructions").size(13))
+        .style(if config_tab == ConfigTab::Instructions {
+            tab_btn_active
+        } else {
+            tab_btn_inactive
+        })
+        .padding([6, 14])
+        .on_press(Message::SwitchConfigTab(ConfigTab::Instructions));
+
+    let advanced_btn = button(text("Advanced").size(13))
+        .style(if config_tab == ConfigTab::Advanced {
+            tab_btn_active
+        } else {
+            tab_btn_inactive
+        })
+        .padding([6, 14])
+        .on_press(Message::SwitchConfigTab(ConfigTab::Advanced));
+
+    // close: E5CD
+    let close_btn = button(icon('\u{E5CD}', 20.0))
+        .style(icon_btn)
+        .padding(6)
+        .on_press(Message::CloseConfig);
+
+    let top_bar = container(
+        row![
+            row![setup_btn, instructions_btn, advanced_btn]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+            container(close_btn).align_right(Fill)
         ]
-        .spacing(6)
-        .align_y(iced::alignment::Vertical::Center);
+        .align_y(iced::Alignment::Center),
+    )
+    .padding([10, 14])
+    .width(Fill);
 
-        let prompt_card = container(column![header_row, name_input, instruction_input].spacing(6))
-            .padding(10)
-            .style(container::rounded_box);
-
-        prompts_col = prompts_col.push(prompt_card);
-    }
-
-    let add_btn = if prompt_count < MAX_PROMPTS {
-        button(text("+ Add Prompt").size(14))
-            .on_press(Message::AddPrompt)
-            .style(button::secondary)
-            .padding([8, 14])
-    } else {
-        button(text("+ Add Prompt").size(14))
-            .style(button::secondary)
-            .padding([8, 14])
+    let tab_content = match config_tab {
+        ConfigTab::Setup => view_setup_tab(&model_path, &window_secs, &overlap_secs),
+        ConfigTab::Instructions => view_instructions_tab(state, &prompts, config_default),
+        ConfigTab::Advanced => view_advanced_tab(),
     };
 
-    prompts_col = prompts_col.push(add_btn);
+    let save_btn = button(text("Save").size(13))
+        .style(primary_btn)
+        .padding([8, 20])
+        .on_press(Message::SaveConfig);
 
-    // Transcriber section
-    let transcriber_section = container(
-        column![
-            text("Transcriber")
-                .size(18)
-                .color(Color::from_rgb8(0xE5, 0xE7, 0xEB)),
-            column![
-                text("Model path")
-                    .size(13)
-                    .color(Color::from_rgb8(0x9C, 0xA3, 0xAF)),
-                text_input("models/ggml-small.en.bin", &model_path)
-                    .on_input(Message::ModelPathChanged)
-                    .size(14)
-                    .padding(8),
-            ]
-            .spacing(4),
-            row![
-                column![
-                    text("Window (seconds)")
-                        .size(13)
-                        .color(Color::from_rgb8(0x9C, 0xA3, 0xAF)),
-                    text_input("2.0", &window_secs)
-                        .on_input(Message::WindowSecondsChanged)
-                        .size(14)
-                        .padding(8),
-                ]
-                .spacing(4)
-                .width(Fill),
-                column![
-                    text("Overlap (seconds)")
-                        .size(13)
-                        .color(Color::from_rgb8(0x9C, 0xA3, 0xAF)),
-                    text_input("0.25", &overlap_secs)
-                        .on_input(Message::OverlapSecondsChanged)
-                        .size(14)
-                        .padding(8),
-                ]
-                .spacing(4)
-                .width(Fill),
-            ]
-            .spacing(10),
-        ]
-        .spacing(8),
-    )
-    .padding(10)
-    .style(container::rounded_box);
-
-    let scrollable_content = column![
-        text("Agent Prompts")
-            .size(18)
-            .color(Color::from_rgb8(0xE5, 0xE7, 0xEB)),
-        prompts_col,
-        transcriber_section,
-    ]
-    .spacing(12);
-
-    let footer = row![
-        container(
-            button(text("Save").size(15))
-                .on_press(Message::SaveConfig)
-                .style(button::primary)
-                .padding([8, 20])
-        )
-        .align_right(Fill)
-    ]
-    .align_y(iced::alignment::Vertical::Center);
+    let bottom_bar = container(save_btn)
+        .width(Fill)
+        .padding([10, 14])
+        .align_x(iced::alignment::Horizontal::Right);
 
     let content = column![
-        title,
-        container(scrollable(scrollable_content).height(FillPortion(8))).padding(2),
-        footer,
-    ]
-    .spacing(14)
-    .padding(18)
-    .height(Fill);
+        top_bar,
+        container(scrollable(tab_content).height(Fill)).height(FillPortion(9)),
+        container(bottom_bar).height(FillPortion(1))
+    ];
 
     container(content)
+        .style(bg_container)
         .width(Fill)
         .height(Fill)
-        .style(container::dark)
         .into()
 }
 
+fn view_setup_tab(
+    model_path: &str,
+    window_secs: &str,
+    overlap_secs: &str,
+) -> Column<'static, Message> {
+    let model_path_input = text_input("Model path", model_path)
+        .style(borderless_input)
+        .padding(10)
+        .on_input(Message::ModelPathChanged);
+
+    let window_secs_input = text_input("Window seconds", window_secs)
+        .style(borderless_input)
+        .padding(10)
+        .on_input(Message::WindowSecondsChanged);
+
+    let overlap_secs_input = text_input("Overlap seconds", overlap_secs)
+        .style(borderless_input)
+        .padding(10)
+        .on_input(Message::OverlapSecondsChanged);
+
+    let card_content = column![
+        text("Transcriber").size(15).color(TEXT_COLOR),
+        column![text("Model Path").size(11).color(MUTED), model_path_input].spacing(4),
+        column![text("Window (s)").size(11).color(MUTED), window_secs_input].spacing(4),
+        column![
+            text("Overlap (s)").size(11).color(MUTED),
+            overlap_secs_input
+        ]
+        .spacing(4),
+    ]
+    .spacing(10)
+    .padding(14);
+
+    column![container(card_content).style(surface_container).width(Fill)]
+        .spacing(12)
+        .padding(14)
+}
+
+fn view_instructions_tab<'a>(
+    state: &'a UiRuntime,
+    prompts: &[PromptEntry],
+    config_default: usize,
+) -> Column<'a, Message> {
+    let mut prompts_column = column![].spacing(10);
+
+    for (idx, prompt) in prompts.iter().enumerate() {
+        let is_default = config_default == idx;
+
+        // radio: E837=radio_checked, E836=radio_unchecked
+        let radio_btn = button(if is_default {
+            icon('\u{E837}', 20.0)
+        } else {
+            icon('\u{E836}', 20.0)
+        })
+        .style(if is_default {
+            icon_btn_active
+        } else {
+            icon_btn
+        })
+        .padding(4)
+        .on_press(Message::SetDefaultPrompt(idx));
+
+        let name_input = text_input("Name", &prompt.name)
+            .style(borderless_input)
+            .padding(10)
+            .on_input(move |val| Message::PromptNameChanged(idx, val));
+
+        let instruction_editor = text_editor(&state.instruction_editors[idx])
+            .style(borderless_editor)
+            .padding(10)
+            .height(100)
+            .on_action(move |action| Message::PromptInstructionAction(idx, action));
+
+        // delete: E872
+        let remove_btn = if prompts.len() > 1 {
+            button(icon('\u{E872}', 18.0))
+                .style(icon_btn_danger)
+                .padding(4)
+                .on_press(Message::RemovePrompt(idx))
+        } else {
+            button(icon('\u{E872}', 18.0)).style(icon_btn).padding(4)
+        };
+
+        let prompt_card = column![
+            row![radio_btn, container(name_input).width(Fill), remove_btn]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+            column![
+                text("Instruction").size(11).color(MUTED),
+                instruction_editor
+            ]
+            .spacing(4)
+        ]
+        .spacing(8)
+        .padding(12);
+
+        prompts_column =
+            prompts_column.push(container(prompt_card).style(surface_container).width(Fill));
+    }
+
+    // add: E145
+    if prompts.len() < MAX_PROMPTS {
+        let add_btn = button(
+            row![icon('\u{E145}', 18.0), text("Add Prompt").size(13)]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+        )
+        .style(ghost_btn)
+        .padding([6, 14])
+        .on_press(Message::AddPrompt);
+        prompts_column = prompts_column.push(add_btn);
+    }
+
+    column![prompts_column].spacing(12).padding(14)
+}
+
+fn view_advanced_tab() -> Column<'static, Message> {
+    column![text("More settings coming soon.").size(13).color(MUTED)]
+        .spacing(12)
+        .padding(14)
+}
+
 fn subscription(_state: &UiRuntime) -> Subscription<Message> {
-    time::every(Duration::from_millis(16)).map(|_| Message::Tick)
+    Subscription::batch([
+        time::every(Duration::from_millis(16)).map(|_| Message::Tick),
+        keyboard::on_key_press(|key, modifiers| Some(Message::KeyPressed(key, modifiers))),
+    ])
 }
 
 fn theme(_state: &UiRuntime) -> Theme {
-    Theme::TokyoNight
+    Theme::custom(
+        "Arai".to_string(),
+        Palette {
+            background: BG,
+            text: TEXT_COLOR,
+            primary: PINK,
+            success: GREEN,
+            danger: RED,
+        },
+    )
 }
