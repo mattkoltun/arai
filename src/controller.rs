@@ -96,6 +96,9 @@ impl Controller {
                         (AppEventSource::Agent, AppEventKind::Error(message)) => {
                             error!("Agent event: {message}");
                         }
+                        (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
+                            self.process_text(text);
+                        }
                         (AppEventSource::Ui, AppEventKind::UiStartListening) => {
                             self.start_listening();
                         }
@@ -107,9 +110,6 @@ impl Controller {
                         }
                         (AppEventSource::Ui, AppEventKind::UiShutdown) => {
                             self.shutdown();
-                        }
-                        (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
-                            self.process_text(text);
                         }
                         (
                             AppEventSource::Ui,
