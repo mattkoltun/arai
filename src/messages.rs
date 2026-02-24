@@ -1,3 +1,5 @@
+use crate::config::{AgentPrompt, TranscriberConfig};
+
 /// Captured audio payload with metadata.
 #[derive(Clone, Debug)]
 pub struct AudioChunk {
@@ -25,6 +27,11 @@ pub enum AppEventKind {
     UiSubmitText(String),
     UiShutdown,
     AgentResponse(String),
+    UiUpdatePrompts {
+        prompts: Vec<AgentPrompt>,
+        default_prompt: usize,
+    },
+    UiUpdateTranscriber(TranscriberConfig),
 }
 
 // #[derive(Clone, Debug)]

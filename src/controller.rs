@@ -18,7 +18,6 @@ pub struct Controller {
     transcriber: Mutex<Option<Transcriber>>,
     app_event_rx: Mutex<AppEventReceiver>,
     agent: Agent,
-    agent_instruction: String,
     app_state: AppStateHandle,
     ui: Ui,
     shutting_down: AtomicBool,
@@ -30,7 +29,6 @@ impl Controller {
         transcriber: Transcriber,
         app_event_rx: AppEventReceiver,
         agent: Agent,
-        agent_instruction: String,
         app_state: AppStateHandle,
         ui: Ui,
     ) -> Self {
@@ -39,7 +37,6 @@ impl Controller {
             transcriber: Mutex::new(Some(transcriber)),
             app_event_rx: Mutex::new(app_event_rx),
             agent,
-            agent_instruction,
             app_state,
             ui,
             shutting_down: AtomicBool::new(false),
@@ -71,7 +68,8 @@ impl Controller {
 
     pub fn submit_text(&self, text: String) {
         debug!("Controller submitting text");
-        self.agent.submit(self.agent_instruction.clone(), text);
+        let instruction = self.app_state.agent_instruction();
+        self.agent.submit(instruction, text);
     }
 
     pub fn shutdown(&self) {
@@ -112,6 +110,23 @@ impl Controller {
                         }
                         (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
                             self.process_text(text);
+                        }
+                        (
+                            AppEventSource::Ui,
+                            AppEventKind::UiUpdatePrompts {
+                                prompts,
+                                default_prompt,
+                            },
+                        ) => {
+                            info!("Controller updating agent prompts");
+                            self.app_state.update_prompts(prompts, default_prompt);
+                        }
+                        (
+                            AppEventSource::Ui,
+                            AppEventKind::UiUpdateTranscriber(transcriber_config),
+                        ) => {
+                            info!("Controller updating transcriber config");
+                            self.app_state.update_transcriber(transcriber_config);
                         }
                         (source, kind) => {
                             let _ = (source, kind);

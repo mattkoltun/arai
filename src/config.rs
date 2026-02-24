@@ -1,10 +1,13 @@
 use crate::logger;
 use log::LevelFilter;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_AGENT_PROMPT: &str =
     "Rewrite the user text for clarity and brevity while preserving meaning.";
+const DEFAULT_MODEL_PATH: &str = "models/ggml-small.en.bin";
+const DEFAULT_WINDOW_SECONDS: f32 = 2.0;
+const DEFAULT_OVERLAP_SECONDS: f32 = 0.25;
 
 #[derive(Debug)]
 pub enum ConfigError {
@@ -55,6 +58,8 @@ pub struct Config {
     pub log_path: PathBuf,
     pub open_api_key: String,
     pub agent_prompts: Vec<AgentPrompt>,
+    pub default_prompt: usize,
+    pub transcriber: TranscriberConfig,
 }
 
 impl Config {
@@ -67,18 +72,47 @@ impl Config {
         from_partial(merged)
     }
 
-    pub fn agent_instruction(&self) -> String {
-        self.agent_prompts
-            .first()
-            .map(|prompt| prompt.instruction.clone())
-            .unwrap_or_default()
+    pub fn save(&self) -> Result<(), ConfigError> {
+        let path = config_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let file_config = FileConfig {
+            log_level: Some(self.log_level.to_string().to_lowercase()),
+            log_path: Some(self.log_path.display().to_string()),
+            open_api_key: Some(self.open_api_key.clone()),
+            agent_prompts: Some(self.agent_prompts.clone()),
+            default_prompt: Some(self.default_prompt),
+            transcriber: Some(self.transcriber.clone()),
+        };
+        let yaml = serde_yaml::to_string(&file_config)?;
+        std::fs::write(&path, yaml)?;
+        Ok(())
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentPrompt {
     pub name: String,
     pub instruction: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TranscriberConfig {
+    pub model_path: String,
+    pub window_seconds: f32,
+    pub overlap_seconds: f32,
+}
+
+impl Default for TranscriberConfig {
+    fn default() -> Self {
+        Self {
+            model_path: DEFAULT_MODEL_PATH.to_string(),
+            window_seconds: DEFAULT_WINDOW_SECONDS,
+            overlap_seconds: DEFAULT_OVERLAP_SECONDS,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -87,6 +121,18 @@ struct PartialConfig {
     log_path: Option<String>,
     open_api_key: Option<String>,
     agent_prompts: Option<Vec<AgentPrompt>>,
+    default_prompt: Option<usize>,
+    transcriber: Option<TranscriberConfig>,
+}
+
+#[derive(Serialize)]
+struct FileConfig {
+    log_level: Option<String>,
+    log_path: Option<String>,
+    open_api_key: Option<String>,
+    agent_prompts: Option<Vec<AgentPrompt>>,
+    default_prompt: Option<usize>,
+    transcriber: Option<TranscriberConfig>,
 }
 
 impl PartialConfig {
@@ -99,6 +145,8 @@ impl PartialConfig {
                 name: "default".to_string(),
                 instruction: DEFAULT_AGENT_PROMPT.to_string(),
             }]),
+            default_prompt: Some(0),
+            transcriber: Some(TranscriberConfig::default()),
         }
     }
 
@@ -114,12 +162,14 @@ impl PartialConfig {
     fn from_env() -> Result<Self, ConfigError> {
         let log_level = std::env::var("ARAI_LOG_LEVEL").ok();
         let log_path = std::env::var("ARAI_LOG_PATH").ok();
-        let open_api_key = std::env::var("ARAI_OPENAI_API_KEY").ok();
+        let open_api_key = std::env::var("OPENAI_API_KEY").ok();
         Ok(Self {
             log_level,
             log_path,
             open_api_key,
             agent_prompts: None,
+            default_prompt: None,
+            transcriber: None,
         })
     }
 
@@ -129,6 +179,8 @@ impl PartialConfig {
             log_path: other.log_path.or(self.log_path),
             open_api_key: other.open_api_key.or(self.open_api_key),
             agent_prompts: other.agent_prompts.or(self.agent_prompts),
+            default_prompt: other.default_prompt.or(self.default_prompt),
+            transcriber: other.transcriber.or(self.transcriber),
         }
     }
 }
@@ -166,11 +218,22 @@ fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
         }
     }
 
+    let default_prompt = partial.default_prompt.unwrap_or(0);
+    let default_prompt = if default_prompt < agent_prompts.len() {
+        default_prompt
+    } else {
+        0
+    };
+
+    let transcriber = partial.transcriber.unwrap_or_default();
+
     Ok(Config {
         log_level,
         log_path,
         open_api_key,
         agent_prompts,
+        default_prompt,
+        transcriber,
     })
 }
 
@@ -187,6 +250,8 @@ mod tests {
                 name: "default".to_string(),
                 instruction: "rewrite".to_string(),
             }]),
+            default_prompt: Some(0),
+            transcriber: Some(TranscriberConfig::default()),
         }
     }
 
@@ -196,7 +261,7 @@ mod tests {
         assert_eq!(cfg.log_level, LevelFilter::Info);
         assert_eq!(cfg.log_path, PathBuf::from("/tmp/arai-test.log"));
         assert_eq!(cfg.open_api_key, "test-key");
-        assert_eq!(cfg.agent_instruction(), "rewrite");
+        assert_eq!(cfg.agent_prompts[0].instruction, "rewrite");
     }
 
     #[test]
