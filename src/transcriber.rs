@@ -1,4 +1,5 @@
 use crate::channels::{AppEventSender, AudioReceiver};
+use crate::config::TranscriberConfig;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk};
 use log::{debug, error, info};
 use std::thread::{self, JoinHandle};
@@ -6,18 +7,19 @@ use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
 };
 
-const MODEL_PATH: &str = "models/ggml-small.en.bin";
 const TARGET_SAMPLE_RATE: u32 = 16_000;
-const WINDOW_SECONDS: f32 = 2.0;
-const OVERLAP_SECONDS: f32 = 0.25;
 
 pub struct Transcriber {
     handle: Option<JoinHandle<()>>,
 }
 
 impl Transcriber {
-    pub fn new(audio_rx: AudioReceiver, app_event_tx: AppEventSender) -> Self {
-        let handle = thread::spawn(move || worker(audio_rx, app_event_tx));
+    pub fn new(
+        audio_rx: AudioReceiver,
+        app_event_tx: AppEventSender,
+        config: TranscriberConfig,
+    ) -> Self {
+        let handle = thread::spawn(move || worker(audio_rx, app_event_tx, config));
         Self {
             handle: Some(handle),
         }
@@ -32,9 +34,11 @@ impl Drop for Transcriber {
     }
 }
 
-fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender) {
-    let ctx = match WhisperContext::new_with_params(MODEL_PATH, WhisperContextParameters::default())
-    {
+fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender, config: TranscriberConfig) {
+    let ctx = match WhisperContext::new_with_params(
+        &config.model_path,
+        WhisperContextParameters::default(),
+    ) {
         Ok(c) => c,
         Err(err) => {
             error!("Failed to load model: {err}");
@@ -51,8 +55,8 @@ fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender) {
     while let Ok(chunk) = audio_rx.recv() {
         debug!("Transcriber received audio chunk");
         buffer.extend(resample_to_mono_16k(&chunk));
-        let window_samples = (TARGET_SAMPLE_RATE as f32 * WINDOW_SECONDS) as usize;
-        let overlap_samples = (TARGET_SAMPLE_RATE as f32 * OVERLAP_SECONDS) as usize;
+        let window_samples = (TARGET_SAMPLE_RATE as f32 * config.window_seconds) as usize;
+        let overlap_samples = (TARGET_SAMPLE_RATE as f32 * config.overlap_seconds) as usize;
         if buffer.len() >= window_samples || chunk.is_final {
             match transcribe_audio(&ctx, &buffer) {
                 Ok(text) => {

@@ -34,16 +34,16 @@ fn main() {
     let (app_event_tx, app_event_rx) = mpsc::channel::<messages::AppEvent>();
 
     let recorder = recorder::Recorder::new(audio_tx, app_event_tx.clone());
-    let transcriber = transcriber::Transcriber::new(audio_rx, app_event_tx.clone());
+    let transcriber =
+        transcriber::Transcriber::new(audio_rx, app_event_tx.clone(), config.transcriber.clone());
     let agent = agent::Agent::new(app_event_tx.clone(), config.open_api_key.clone());
     let ui = ui::Ui::new(app_event_tx.clone());
-    let app_state = app_state::AppState::new();
+    let app_state = app_state::AppState::new(config);
     let controller = std::sync::Arc::new(controller::Controller::new(
         recorder,
         transcriber,
         app_event_rx,
         agent,
-        config.agent_instruction(),
         app_state,
         ui.clone(),
     ));

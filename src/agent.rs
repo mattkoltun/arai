@@ -28,20 +28,22 @@ impl Agent {
     pub fn submit(&self, instructions: String, text: String) {
         let app_event_tx = self.app_event_tx.clone();
         let api_key = self.api_key.clone();
-        thread::spawn(move || match call_openai_with_retry(&api_key, instructions, text) {
-            Ok(response) => {
-                let _ = app_event_tx.send(AppEvent {
-                    source: AppEventSource::Agent,
-                    kind: AppEventKind::AgentResponse(response),
-                });
-            }
-            Err(err) => {
-                let _ = app_event_tx.send(AppEvent {
-                    source: AppEventSource::Agent,
-                    kind: AppEventKind::Error(format!("Agent request failed: {err}")),
-                });
-            }
-        });
+        thread::spawn(
+            move || match call_openai_with_retry(&api_key, instructions, text) {
+                Ok(response) => {
+                    let _ = app_event_tx.send(AppEvent {
+                        source: AppEventSource::Agent,
+                        kind: AppEventKind::AgentResponse(response),
+                    });
+                }
+                Err(err) => {
+                    let _ = app_event_tx.send(AppEvent {
+                        source: AppEventSource::Agent,
+                        kind: AppEventKind::Error(format!("Agent request failed: {err}")),
+                    });
+                }
+            },
+        );
     }
 }
 
@@ -86,7 +88,11 @@ fn call_openai_with_retry(
     }
 }
 
-fn call_openai_once(client: &Client, api_key: &str, request: &Value) -> Result<String, reqwest::Error> {
+fn call_openai_once(
+    client: &Client,
+    api_key: &str,
+    request: &Value,
+) -> Result<String, reqwest::Error> {
     let response: Value = client
         .post("https://api.openai.com/v1/responses")
         .bearer_auth(api_key)
