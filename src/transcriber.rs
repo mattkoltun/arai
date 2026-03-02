@@ -58,6 +58,13 @@ fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender, config: Transcr
         let window_samples = (TARGET_SAMPLE_RATE as f32 * config.window_seconds) as usize;
         let overlap_samples = (TARGET_SAMPLE_RATE as f32 * config.overlap_seconds) as usize;
         if buffer.len() >= window_samples || chunk.is_final {
+            let energy = rms_energy(&buffer);
+            debug!(
+                "Energy gate: rms={:.6}, buffer_samples={}, is_final={}",
+                energy,
+                buffer.len(),
+                chunk.is_final
+            );
             match transcribe_audio(&ctx, &buffer) {
                 Ok(text) => {
                     if !text.is_empty() {
@@ -95,11 +102,14 @@ fn transcribe_audio(ctx: &WhisperContext, audio: &[f32]) -> Result<String, Whisp
     params.set_translate(false);
     params.set_n_threads(num_cpus());
     params.set_print_progress(false);
-    params.set_print_realtime(true);
+    params.set_print_realtime(false);
     params.set_print_timestamps(false);
     params.set_print_special(false);
     params.set_suppress_blank(true);
     params.set_suppress_non_speech_tokens(true);
+    params.set_no_context(true);
+    params.set_single_segment(true);
+    params.set_temperature_inc(0.0);
 
     state.full(params, audio)?;
     collect_segments(&state)
@@ -123,6 +133,14 @@ fn num_cpus() -> i32 {
     std::thread::available_parallelism()
         .map(|n| n.get() as i32)
         .unwrap_or(1)
+}
+
+fn rms_energy(audio: &[f32]) -> f32 {
+    if audio.is_empty() {
+        return 0.0;
+    }
+    let sum_sq: f32 = audio.iter().map(|&s| s * s).sum();
+    (sum_sq / audio.len() as f32).sqrt()
 }
 
 fn resample_to_mono_16k(chunk: &AudioChunk) -> Vec<f32> {
@@ -202,5 +220,28 @@ mod tests {
         let audio = chunk(vec![], 1, 48_000);
         let output = resample_to_mono_16k(&audio);
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn rms_energy_returns_zero_for_empty_audio() {
+        assert_eq!(rms_energy(&[]), 0.0);
+    }
+
+    #[test]
+    fn rms_energy_returns_zero_for_silence() {
+        let silence = vec![0.0f32; 1600];
+        assert_eq!(rms_energy(&silence), 0.0);
+    }
+
+    #[test]
+    fn rms_energy_detects_loud_audio() {
+        let loud = vec![0.5f32; 1600];
+        assert!(rms_energy(&loud) > SILENCE_RMS_THRESHOLD);
+    }
+
+    #[test]
+    fn rms_energy_below_threshold_for_quiet_audio() {
+        let quiet = vec![0.001f32; 1600];
+        assert!(rms_energy(&quiet) < SILENCE_RMS_THRESHOLD);
     }
 }
