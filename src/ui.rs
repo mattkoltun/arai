@@ -343,7 +343,7 @@ impl Ui {
 
     pub fn refresh_with_state(&self, snapshot: AppStateSnapshot) {
         if let Ok(mut state) = self.state.lock() {
-            if !state.processing {
+            if !state.processing && state.processed_text.is_none() {
                 state.input = snapshot.transcribed_text;
             }
             state.snapshot_prompts = snapshot.agent_prompts;

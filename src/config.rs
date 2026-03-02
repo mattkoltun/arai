@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 const DEFAULT_AGENT_PROMPT: &str =
     "Rewrite the user text for clarity and brevity while preserving meaning.";
 const DEFAULT_MODEL_PATH: &str = "models/ggml-small.en.bin";
-const DEFAULT_WINDOW_SECONDS: f32 = 2.0;
+const DEFAULT_WINDOW_SECONDS: f32 = 3.0;
 const DEFAULT_OVERLAP_SECONDS: f32 = 0.25;
 
 #[derive(Debug)]

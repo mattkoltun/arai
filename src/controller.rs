@@ -67,8 +67,11 @@ impl Controller {
     }
 
     pub fn submit_text(&self, text: String) {
-        debug!("Controller submitting text");
         let instruction = self.app_state.agent_instruction();
+        debug!(
+            "Controller submitting text with instruction: {}",
+            &instruction[..instruction.len().min(80)]
+        );
         self.agent.submit(instruction, text);
     }
 
