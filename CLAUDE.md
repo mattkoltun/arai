@@ -36,7 +36,7 @@ Recorder (cpal) → AudioChunk → Transcriber (whisper) → text → Agent (Ope
 **Key modules:**
 - `main.rs` — Entry point; wires up config, logger, channels, and spawns threads
 - `recorder.rs` — Audio capture via cpal (F32/I16/U16 formats), streams chunks over channel
-- `transcriber.rs` — Resamples to 16kHz mono, 2s windows with 0.25s overlap, runs Whisper model
+- `transcriber.rs` — Resamples to 16kHz mono, 3s windows with 0.25s overlap, runs Whisper model with anti-hallucination params
 - `agent.rs` — OpenAI gpt-4o-mini calls with exponential backoff retry (429s, 5xx, timeouts)
 - `controller.rs` — Central event loop bridging all components via AppEvent channel
 - `ui.rs` — Iced GUI (480x620, Tokyo Night theme) with text editor, Listen/Submit/Copy buttons
@@ -55,6 +55,7 @@ Recorder (cpal) → AudioChunk → Transcriber (whisper) → text → Agent (Ope
 - Conventional Commits: `feat:`, `fix:`, `test:`, `docs:`, etc.
 - Unit tests go in `#[cfg(test)]` modules alongside code; name with behavior-first labels (e.g., `handles_empty_input`)
 - Keep `main.rs` thin; move logic to dedicated modules
+- Add `///` doc comments to all public structs, impl blocks, and functions. Update existing doc comments when changing behavior.
 
 ## Configuration
 

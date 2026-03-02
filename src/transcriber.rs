@@ -7,13 +7,19 @@ use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
 };
 
+/// Target sample rate required by the Whisper model.
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 
+/// Manages a background thread that receives audio chunks, resamples them,
+/// and runs Whisper transcription in a sliding-window loop.
 pub struct Transcriber {
     handle: Option<JoinHandle<()>>,
 }
 
 impl Transcriber {
+    /// Spawns the transcriber worker thread. Audio chunks received on `audio_rx`
+    /// are accumulated into a buffer and transcribed when the buffer reaches the
+    /// configured window size or when a final chunk arrives.
     pub fn new(
         audio_rx: AudioReceiver,
         app_event_tx: AppEventSender,
@@ -26,6 +32,7 @@ impl Transcriber {
     }
 }
 
+/// Joins the worker thread on drop to ensure clean shutdown.
 impl Drop for Transcriber {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
@@ -34,6 +41,10 @@ impl Drop for Transcriber {
     }
 }
 
+/// Main transcriber loop. Loads the Whisper model, then continuously receives
+/// audio chunks, accumulates them into a buffer, and runs transcription when
+/// the buffer reaches the configured window size or a final chunk is received.
+/// Transcription results are sent to the controller via `app_event_tx`.
 fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender, config: TranscriberConfig) {
     let ctx = match WhisperContext::new_with_params(
         &config.model_path,
@@ -95,6 +106,11 @@ fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender, config: Transcr
     }
 }
 
+/// Runs Whisper inference on a buffer of 16kHz mono f32 audio samples.
+/// Uses greedy decoding with parameters tuned to reduce hallucinations:
+/// `no_context` prevents decoder feedback loops, `single_segment` suits
+/// short streaming windows, and `temperature_inc(0.0)` disables fallback
+/// temperature increases that produce random output.
 fn transcribe_audio(ctx: &WhisperContext, audio: &[f32]) -> Result<String, WhisperError> {
     let mut state = ctx.create_state()?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -115,6 +131,7 @@ fn transcribe_audio(ctx: &WhisperContext, audio: &[f32]) -> Result<String, Whisp
     collect_segments(&state)
 }
 
+/// Extracts and concatenates all text segments from a completed Whisper state.
 fn collect_segments(state: &whisper_rs::WhisperState) -> Result<String, WhisperError> {
     let segments = state.full_n_segments()?;
     debug!("Transcription segments: {}", segments);
@@ -129,12 +146,15 @@ fn collect_segments(state: &whisper_rs::WhisperState) -> Result<String, WhisperE
     Ok(output)
 }
 
+/// Returns the number of available CPU cores as an i32 for Whisper thread config.
 fn num_cpus() -> i32 {
     std::thread::available_parallelism()
         .map(|n| n.get() as i32)
         .unwrap_or(1)
 }
 
+/// Computes the root mean square energy of an audio buffer.
+/// Returns 0.0 for empty input.
 fn rms_energy(audio: &[f32]) -> f32 {
     if audio.is_empty() {
         return 0.0;
@@ -143,6 +163,8 @@ fn rms_energy(audio: &[f32]) -> f32 {
     (sum_sq / audio.len() as f32).sqrt()
 }
 
+/// Converts an `AudioChunk` (arbitrary sample rate, mono or multi-channel, i16)
+/// into mono f32 samples at 16kHz using linear interpolation resampling.
 fn resample_to_mono_16k(chunk: &AudioChunk) -> Vec<f32> {
     let channels = chunk.channels.max(1) as usize;
     let mut mono = Vec::with_capacity(chunk.samples.len() / channels);
@@ -236,12 +258,12 @@ mod tests {
     #[test]
     fn rms_energy_detects_loud_audio() {
         let loud = vec![0.5f32; 1600];
-        assert!(rms_energy(&loud) > SILENCE_RMS_THRESHOLD);
+        assert!(rms_energy(&loud) > 0.1);
     }
 
     #[test]
-    fn rms_energy_below_threshold_for_quiet_audio() {
+    fn rms_energy_low_for_quiet_audio() {
         let quiet = vec![0.001f32; 1600];
-        assert!(rms_energy(&quiet) < SILENCE_RMS_THRESHOLD);
+        assert!(rms_energy(&quiet) < 0.01);
     }
 }
