@@ -450,6 +450,7 @@ enum Message {
     WindowSecondsChanged(String),
     OverlapSecondsChanged(String),
     SwitchConfigTab(ConfigTab),
+    Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
 }
 
@@ -660,6 +661,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::Shutdown => {
+            state.ui.send_event(AppEventKind::UiShutdown);
+            iced::exit()
+        }
         Message::SwitchConfigTab(tab) => {
             if let Ok(mut ui_state) = state.ui.state.lock() {
                 ui_state.config_tab = tab;
@@ -726,6 +731,17 @@ fn view_main<'a>(
     has_processed: bool,
     char_count: usize,
 ) -> Element<'a, Message> {
+    // close: E5CD
+    let close_btn = button(icon('\u{E5CD}', 20.0))
+        .style(icon_btn)
+        .padding(6)
+        .on_press(Message::Shutdown);
+
+    let top_bar =
+        container(row![container(close_btn).align_right(Fill)].align_y(iced::Alignment::Center))
+            .padding([10, 14])
+            .width(Fill);
+
     let editor_area = text_editor(&state.editor)
         .style(borderless_editor)
         .padding(16)
@@ -781,7 +797,7 @@ fn view_main<'a>(
     ]
     .spacing(6);
 
-    let content = column![
+    let body = column![
         container(editor_area)
             .style(surface_container)
             .padding(4)
@@ -789,7 +805,9 @@ fn view_main<'a>(
         container(bottom_bar).height(FillPortion(2))
     ]
     .spacing(8)
-    .padding(14);
+    .padding([0, 14]);
+
+    let content = column![top_bar, body];
 
     container(content)
         .style(bg_container)
