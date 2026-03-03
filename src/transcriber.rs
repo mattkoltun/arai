@@ -71,11 +71,17 @@ fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender, config: Transcr
         if buffer.len() >= window_samples || chunk.is_final {
             let energy = rms_energy(&buffer);
             debug!(
-                "Energy gate: rms={:.6}, buffer_samples={}, is_final={}",
+                "Energy gate: rms={:.6}, threshold={}, buffer_samples={}, is_final={}",
                 energy,
+                config.silence_threshold,
                 buffer.len(),
                 chunk.is_final
             );
+            if energy < config.silence_threshold {
+                debug!("Audio below silence threshold, skipping transcription");
+                buffer.clear();
+                continue;
+            }
             match transcribe_audio(&ctx, &buffer) {
                 Ok(text) => {
                     if !text.is_empty() {
