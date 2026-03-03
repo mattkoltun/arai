@@ -58,6 +58,13 @@ impl AppState {
         }
     }
 
+    /// Replaces the transcribed text with the given value.
+    pub fn set_transcribed_text(&self, text: String) {
+        if let Ok(mut value) = self.transcribed_text.lock() {
+            *value = text;
+        }
+    }
+
     pub(crate) fn append_transcription(&self, text: &str) {
         if let Ok(mut value) = self.transcribed_text.lock() {
             if !value.is_empty() && !value.ends_with(' ') {

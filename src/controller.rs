@@ -111,6 +111,9 @@ impl Controller {
                         (AppEventSource::Ui, AppEventKind::UiSubmitText(text)) => {
                             self.submit_text(text);
                         }
+                        (AppEventSource::Ui, AppEventKind::UiUpdateText(text)) => {
+                            self.app_state.set_transcribed_text(text);
+                        }
                         (AppEventSource::Ui, AppEventKind::UiShutdown) => {
                             self.shutdown();
                         }
