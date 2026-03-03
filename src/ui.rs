@@ -261,6 +261,13 @@ enum ConfigTab {
 
 const MAX_PROMPTS: usize = 10;
 
+struct TranscriberFields {
+    model_path: String,
+    window_secs: String,
+    overlap_secs: String,
+    silence_thresh: String,
+}
+
 #[derive(Clone, Debug, Default)]
 struct PromptEntry {
     name: String,
@@ -280,6 +287,7 @@ struct UiState {
     config_model_path: String,
     config_window_seconds: String,
     config_overlap_seconds: String,
+    config_silence_threshold: String,
     config_tab: ConfigTab,
     snapshot_prompts: Vec<AgentPrompt>,
     snapshot_default: usize,
@@ -449,6 +457,7 @@ enum Message {
     ModelPathChanged(String),
     WindowSecondsChanged(String),
     OverlapSecondsChanged(String),
+    SilenceThresholdChanged(String),
     SwitchConfigTab(ConfigTab),
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
@@ -514,6 +523,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 ui_state.config_model_path = tc.model_path;
                 ui_state.config_window_seconds = tc.window_seconds.to_string();
                 ui_state.config_overlap_seconds = tc.overlap_seconds.to_string();
+                ui_state.config_silence_threshold = tc.silence_threshold.to_string();
                 ui_state.config_tab = ConfigTab::Setup;
                 ui_state.config_open = true;
 
@@ -571,12 +581,18 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     .parse::<f32>()
                     .unwrap_or(0.25)
                     .max(0.0);
+                let silence = ui_state
+                    .config_silence_threshold
+                    .parse::<f32>()
+                    .unwrap_or(0.005)
+                    .max(0.0);
                 state
                     .ui
                     .send_event(AppEventKind::UiUpdateTranscriber(TranscriberConfig {
                         model_path: ui_state.config_model_path.clone(),
                         window_seconds: window,
                         overlap_seconds: overlap,
+                        silence_threshold: silence,
                     }));
 
                 ui_state.config_open = false;
@@ -661,6 +677,12 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::SilenceThresholdChanged(value) => {
+            if let Ok(mut ui_state) = state.ui.state.lock() {
+                ui_state.config_silence_threshold = value;
+            }
+            Task::none()
+        }
         Message::Shutdown => {
             state.ui.send_event(AppEventKind::UiShutdown);
             iced::exit()
@@ -697,18 +719,19 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
     if ui_state.config_open {
         let prompts = ui_state.config_prompts.clone();
         let config_default = ui_state.config_default;
-        let model_path = ui_state.config_model_path.clone();
-        let window_secs = ui_state.config_window_seconds.clone();
-        let overlap_secs = ui_state.config_overlap_seconds.clone();
+        let transcriber_fields = TranscriberFields {
+            model_path: ui_state.config_model_path.clone(),
+            window_secs: ui_state.config_window_seconds.clone(),
+            overlap_secs: ui_state.config_overlap_seconds.clone(),
+            silence_thresh: ui_state.config_silence_threshold.clone(),
+        };
         let config_tab = ui_state.config_tab.clone();
         drop(ui_state);
         return view_config(
             state,
             prompts,
             config_default,
-            model_path,
-            window_secs,
-            overlap_secs,
+            transcriber_fields,
             config_tab,
         );
     }
@@ -820,9 +843,7 @@ fn view_config<'a>(
     state: &'a UiRuntime,
     prompts: Vec<PromptEntry>,
     config_default: usize,
-    model_path: String,
-    window_secs: String,
-    overlap_secs: String,
+    tf: TranscriberFields,
     config_tab: ConfigTab,
 ) -> Element<'a, Message> {
     let setup_btn = button(text("Setup").size(13))
@@ -871,7 +892,12 @@ fn view_config<'a>(
     .width(Fill);
 
     let tab_content = match config_tab {
-        ConfigTab::Setup => view_setup_tab(&model_path, &window_secs, &overlap_secs),
+        ConfigTab::Setup => view_setup_tab(
+            &tf.model_path,
+            &tf.window_secs,
+            &tf.overlap_secs,
+            &tf.silence_thresh,
+        ),
         ConfigTab::Instructions => view_instructions_tab(state, &prompts, config_default),
         ConfigTab::Advanced => view_advanced_tab(),
     };
@@ -903,6 +929,7 @@ fn view_setup_tab(
     model_path: &str,
     window_secs: &str,
     overlap_secs: &str,
+    silence_thresh: &str,
 ) -> Column<'static, Message> {
     let model_path_input = text_input("Model path", model_path)
         .style(borderless_input)
@@ -919,6 +946,11 @@ fn view_setup_tab(
         .padding(10)
         .on_input(Message::OverlapSecondsChanged);
 
+    let silence_thresh_input = text_input("Silence threshold", silence_thresh)
+        .style(borderless_input)
+        .padding(10)
+        .on_input(Message::SilenceThresholdChanged);
+
     let card_content = column![
         text("Transcriber").size(15).color(TEXT_COLOR),
         column![text("Model Path").size(11).color(MUTED), model_path_input].spacing(4),
@@ -926,6 +958,11 @@ fn view_setup_tab(
         column![
             text("Overlap (s)").size(11).color(MUTED),
             overlap_secs_input
+        ]
+        .spacing(4),
+        column![
+            text("Silence Threshold").size(11).color(MUTED),
+            silence_thresh_input
         ]
         .spacing(4),
     ]

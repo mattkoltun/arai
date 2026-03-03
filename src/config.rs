@@ -8,6 +8,7 @@ const DEFAULT_AGENT_PROMPT: &str =
 const DEFAULT_MODEL_PATH: &str = "models/ggml-small.en.bin";
 const DEFAULT_WINDOW_SECONDS: f32 = 3.0;
 const DEFAULT_OVERLAP_SECONDS: f32 = 0.25;
+const DEFAULT_SILENCE_THRESHOLD: f32 = 0.005;
 
 #[derive(Debug)]
 pub enum ConfigError {
@@ -103,6 +104,12 @@ pub struct TranscriberConfig {
     pub model_path: String,
     pub window_seconds: f32,
     pub overlap_seconds: f32,
+    #[serde(default = "default_silence_threshold")]
+    pub silence_threshold: f32,
+}
+
+fn default_silence_threshold() -> f32 {
+    DEFAULT_SILENCE_THRESHOLD
 }
 
 impl Default for TranscriberConfig {
@@ -111,6 +118,7 @@ impl Default for TranscriberConfig {
             model_path: DEFAULT_MODEL_PATH.to_string(),
             window_seconds: DEFAULT_WINDOW_SECONDS,
             overlap_seconds: DEFAULT_OVERLAP_SECONDS,
+            silence_threshold: DEFAULT_SILENCE_THRESHOLD,
         }
     }
 }
