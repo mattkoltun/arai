@@ -351,14 +351,29 @@ impl Ui {
 
     pub fn refresh_with_state(&self, snapshot: AppStateSnapshot) {
         if let Ok(mut state) = self.state.lock() {
-            if !state.processing && state.processed_text.is_none() {
-                state.input = snapshot.transcribed_text;
+            if state.listening {
+                let new_text = snapshot.transcribed_text;
+                if state.input != new_text {
+                    state.input = new_text;
+                    state.needs_repaint = true;
+                }
             }
             state.snapshot_prompts = snapshot.agent_prompts;
             state.snapshot_default = snapshot.default_prompt;
             state.snapshot_transcriber = Some(snapshot.transcriber);
-            state.needs_repaint = true;
-            self.repaint_requested.store(true, Ordering::SeqCst);
+            if state.needs_repaint {
+                self.repaint_requested.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// Syncs the current editor text back to AppState when not listening/processing.
+    fn sync_text_to_app_state(&self) {
+        if let Ok(state) = self.state.lock()
+            && !state.listening
+            && !state.processing
+        {
+            self.send_event(AppEventKind::UiUpdateText(state.input.clone()));
         }
     }
 
@@ -370,6 +385,9 @@ impl Ui {
     }
 
     fn toggle_listen(&self) {
+        // Sync edits before potentially starting transcription
+        self.sync_text_to_app_state();
+
         let mut state = match self.state.lock() {
             Ok(guard) => guard,
             Err(_) => return,
@@ -392,6 +410,9 @@ impl Ui {
     }
 
     fn submit(&self) {
+        // Sync edits before submitting
+        self.sync_text_to_app_state();
+
         let text = {
             let mut state = match self.state.lock() {
                 Ok(guard) => guard,
@@ -412,6 +433,9 @@ impl Ui {
     }
 
     fn copy_processed(&self) -> Option<String> {
+        // Sync edits when user clicks away from editor
+        self.sync_text_to_app_state();
+
         let processed = {
             let state = match self.state.lock() {
                 Ok(guard) => guard,
@@ -489,6 +513,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.editor.perform(action);
             if let Ok(mut ui_state) = state.ui.state.lock()
                 && !ui_state.processing
+                && !ui_state.listening
             {
                 ui_state.input = state.editor.text();
             }
@@ -509,6 +534,8 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::OpenConfig => {
+            // Sync edits when user clicks away from editor
+            state.ui.sync_text_to_app_state();
             if let Ok(mut ui_state) = state.ui.state.lock() {
                 ui_state.config_prompts = ui_state
                     .snapshot_prompts
@@ -765,11 +792,13 @@ fn view_main<'a>(
             .padding([10, 14])
             .width(Fill);
 
-    let editor_area = text_editor(&state.editor)
+    let mut editor_area = text_editor(&state.editor)
         .style(borderless_editor)
         .padding(16)
-        .on_action(Message::EditorAction)
         .height(Fill);
+    if !listening && !processing {
+        editor_area = editor_area.on_action(Message::EditorAction);
+    }
 
     let char_count_text = text(format!("{} chars", char_count)).size(12).color(MUTED);
 

@@ -25,6 +25,7 @@ pub enum AppEventKind {
     UiStartListening,
     UiStopListening,
     UiSubmitText(String),
+    UiUpdateText(String),
     UiShutdown,
     AgentResponse(String),
     UiUpdatePrompts {
