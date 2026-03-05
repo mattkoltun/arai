@@ -127,6 +127,7 @@ mod tests {
             }],
             default_prompt: 0,
             transcriber: TranscriberConfig::default(),
+            global_hotkey: "CmdOrCtrl+Shift+A".to_string(),
         }
     }
 

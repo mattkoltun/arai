@@ -3,6 +3,7 @@ mod app_state;
 mod channels;
 mod config;
 mod controller;
+mod global_hotkey;
 mod logger;
 mod messages;
 mod recorder;
@@ -37,7 +38,11 @@ fn main() {
     let transcriber =
         transcriber::Transcriber::new(audio_rx, app_event_tx.clone(), config.transcriber.clone());
     let agent = agent::Agent::new(app_event_tx.clone(), config.open_api_key.clone());
-    let ui = ui::Ui::new(app_event_tx.clone());
+
+    // Global hotkey must be registered on the main thread (macOS requirement).
+    let hotkey_handle = global_hotkey::HotkeyHandle::register(&config.global_hotkey);
+
+    let ui = ui::Ui::new(app_event_tx.clone(), hotkey_handle);
     let app_state = app_state::AppState::new(config);
     let controller = std::sync::Arc::new(controller::Controller::new(
         recorder,

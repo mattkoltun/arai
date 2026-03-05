@@ -9,6 +9,7 @@ const DEFAULT_MODEL_PATH: &str = "models/ggml-small.en.bin";
 const DEFAULT_WINDOW_SECONDS: f32 = 3.0;
 const DEFAULT_OVERLAP_SECONDS: f32 = 0.25;
 const DEFAULT_SILENCE_THRESHOLD: f32 = 0.005;
+const DEFAULT_GLOBAL_HOTKEY: &str = "CmdOrCtrl+Shift+A";
 
 #[derive(Debug)]
 pub enum ConfigError {
@@ -61,6 +62,7 @@ pub struct Config {
     pub agent_prompts: Vec<AgentPrompt>,
     pub default_prompt: usize,
     pub transcriber: TranscriberConfig,
+    pub global_hotkey: String,
 }
 
 impl Config {
@@ -86,6 +88,7 @@ impl Config {
             agent_prompts: Some(self.agent_prompts.clone()),
             default_prompt: Some(self.default_prompt),
             transcriber: Some(self.transcriber.clone()),
+            global_hotkey: Some(self.global_hotkey.clone()),
         };
         let yaml = serde_yaml::to_string(&file_config)?;
         std::fs::write(&path, yaml)?;
@@ -131,6 +134,7 @@ struct PartialConfig {
     agent_prompts: Option<Vec<AgentPrompt>>,
     default_prompt: Option<usize>,
     transcriber: Option<TranscriberConfig>,
+    global_hotkey: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -141,6 +145,7 @@ struct FileConfig {
     agent_prompts: Option<Vec<AgentPrompt>>,
     default_prompt: Option<usize>,
     transcriber: Option<TranscriberConfig>,
+    global_hotkey: Option<String>,
 }
 
 impl PartialConfig {
@@ -155,6 +160,7 @@ impl PartialConfig {
             }]),
             default_prompt: Some(0),
             transcriber: Some(TranscriberConfig::default()),
+            global_hotkey: Some(DEFAULT_GLOBAL_HOTKEY.to_string()),
         }
     }
 
@@ -178,6 +184,7 @@ impl PartialConfig {
             agent_prompts: None,
             default_prompt: None,
             transcriber: None,
+            global_hotkey: None,
         })
     }
 
@@ -189,6 +196,7 @@ impl PartialConfig {
             agent_prompts: other.agent_prompts.or(self.agent_prompts),
             default_prompt: other.default_prompt.or(self.default_prompt),
             transcriber: other.transcriber.or(self.transcriber),
+            global_hotkey: other.global_hotkey.or(self.global_hotkey),
         }
     }
 }
@@ -234,6 +242,9 @@ fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
     };
 
     let transcriber = partial.transcriber.unwrap_or_default();
+    let global_hotkey = partial
+        .global_hotkey
+        .unwrap_or_else(|| DEFAULT_GLOBAL_HOTKEY.to_string());
 
     Ok(Config {
         log_level,
@@ -242,6 +253,7 @@ fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
         agent_prompts,
         default_prompt,
         transcriber,
+        global_hotkey,
     })
 }
 
@@ -260,6 +272,7 @@ mod tests {
             }]),
             default_prompt: Some(0),
             transcriber: Some(TranscriberConfig::default()),
+            global_hotkey: Some("CmdOrCtrl+Shift+A".to_string()),
         }
     }
 
