@@ -1,6 +1,7 @@
 use crate::app_state::AppStateSnapshot;
 use crate::channels::AppEventSender;
 use crate::config::{AgentPrompt, TranscriberConfig};
+use crate::global_hotkey::HotkeyHandle;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource};
 use iced::font::Family;
 use iced::theme::Palette;
@@ -9,7 +10,7 @@ use iced::widget::{
 };
 use iced::{
     Background, Border, Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme,
-    keyboard, time,
+    keyboard, time, window,
 };
 use log::debug;
 use std::sync::{
@@ -299,16 +300,18 @@ pub struct Ui {
     state: Arc<Mutex<UiState>>,
     repaint_requested: Arc<AtomicBool>,
     app_event_tx: AppEventSender,
+    hotkey_handle: Option<Arc<HotkeyHandle>>,
 }
 
 impl Ui {
-    pub fn new(app_event_tx: AppEventSender) -> Self {
+    pub fn new(app_event_tx: AppEventSender, hotkey_handle: Option<HotkeyHandle>) -> Self {
         let state = Arc::new(Mutex::new(UiState::default()));
         let repaint_requested = Arc::new(AtomicBool::new(false));
         Self {
             state,
             repaint_requested,
             app_event_tx,
+            hotkey_handle: hotkey_handle.map(Arc::new),
         }
     }
 
@@ -332,6 +335,7 @@ impl Ui {
                         editor: text_editor::Content::new(),
                         status_line: "Ready".to_string(),
                         instruction_editors: Vec::new(),
+                        window_id: None,
                     },
                     Task::none(),
                 )
@@ -461,6 +465,7 @@ struct UiRuntime {
     editor: text_editor::Content,
     status_line: String,
     instruction_editors: Vec<text_editor::Content>,
+    window_id: Option<window::Id>,
 }
 
 #[derive(Debug, Clone)]
@@ -485,11 +490,22 @@ enum Message {
     SwitchConfigTab(ConfigTab),
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
+    WindowOpened(window::Id),
 }
 
 fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
     match message {
         Message::Tick => {
+            // Poll global hotkey — toggle listen and focus window on press.
+            let hotkey_fired = if let Some(ref handle) = state.ui.hotkey_handle
+                && handle.poll_event()
+            {
+                state.ui.toggle_listen();
+                true
+            } else {
+                false
+            };
+
             if state.ui.repaint_requested.swap(false, Ordering::SeqCst)
                 && let Ok(mut ui_state) = state.ui.state.lock()
             {
@@ -507,7 +523,15 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     "Ready".to_string()
                 };
             }
-            Task::none()
+            if hotkey_fired {
+                if let Some(id) = state.window_id {
+                    window::gain_focus(id)
+                } else {
+                    Task::none()
+                }
+            } else {
+                Task::none()
+            }
         }
         Message::EditorAction(action) => {
             state.editor.perform(action);
@@ -718,6 +742,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             if let Ok(mut ui_state) = state.ui.state.lock() {
                 ui_state.config_tab = tab;
             }
+            Task::none()
+        }
+        Message::WindowOpened(id) => {
+            state.window_id = Some(id);
             Task::none()
         }
         Message::KeyPressed(key, modifiers) => match key {
@@ -1091,6 +1119,7 @@ fn subscription(_state: &UiRuntime) -> Subscription<Message> {
     Subscription::batch([
         time::every(Duration::from_millis(16)).map(|_| Message::Tick),
         keyboard::on_key_press(|key, modifiers| Some(Message::KeyPressed(key, modifiers))),
+        window::open_events().map(Message::WindowOpened),
     ])
 }
 
