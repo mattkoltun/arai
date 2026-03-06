@@ -852,20 +852,20 @@ fn view_main<'a>(
         button(icon('\u{E163}', 22.0))
             .style(icon_btn)
             .padding([8, 12])
-            .on_press(Message::Submit)
+            .on_press_maybe((!listening).then_some(Message::Submit))
     };
 
     // copy: E14D
     let copy_btn = button(icon('\u{E14D}', 22.0))
         .style(icon_btn)
         .padding([8, 12])
-        .on_press_maybe((has_processed && !processing).then_some(Message::Copy));
+        .on_press_maybe((has_processed && !processing && !listening).then_some(Message::Copy));
 
     // settings: E8B8
     let settings_btn = button(icon('\u{E8B8}', 22.0))
         .style(icon_btn)
         .padding([8, 12])
-        .on_press(Message::OpenConfig);
+        .on_press_maybe((!listening && !processing).then_some(Message::OpenConfig));
 
     let button_group = row![mic_btn, send_btn, copy_btn, settings_btn]
         .spacing(16)
