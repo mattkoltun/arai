@@ -1,0 +1,31 @@
+ISSUE: Controller wraps single-owner resources in Mutex to satisfy Arc<Self>
+
+Recorder and Transcriber are wrapped in Mutex<Option<...>> (controller.rs:17-18) not because
+they need concurrent access, but because the Controller is shared via Arc (for the shutdown
+handle in main.rs:55). Only the Controller's run() loop ever touches these. This is using a
+synchronization primitive as a workaround for ownership rather than for actual concurrency.
+
+SOLUTION:
+
+Separate the shutdown signal from the run loop owner. Instead of sharing the entire Controller
+via Arc, give main.rs a lightweight shutdown handle:
+
+    pub struct ShutdownHandle {
+        flag: Arc<AtomicBool>,
+    }
+
+    impl ShutdownHandle {
+        pub fn shutdown(&self) {
+            self.flag.store(true, Ordering::SeqCst);
+        }
+    }
+
+The Controller creates the ShutdownHandle before being consumed by run(). main.rs holds the
+ShutdownHandle while the Controller owns Recorder and Transcriber directly (no Mutex, no
+Option). The run() method takes self by value (fn run(self)) instead of Arc<Self>.
+
+    let (controller, shutdown_handle) = Controller::new(...);
+    let controller_handle = thread::spawn(move || controller.run());
+    ui.run();
+    shutdown_handle.shutdown();
+    controller_handle.join();

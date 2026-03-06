@@ -1,0 +1,35 @@
+ISSUE: No maximum retry count on the Agent
+
+call_openai_with_retry (agent.rs:68) loops forever with loop {}. If the API returns 429
+indefinitely, the thread retries until the process is killed. The processing state in the UI
+will stay true permanently with no feedback to the user.
+
+SOLUTION:
+
+Add a maximum retry count (e.g., 5 attempts) and return an error when exhausted:
+
+    const MAX_RETRIES: u32 = 5;
+
+    fn call_openai_with_retry(...) -> Result<String, AgentError> {
+        let mut attempt = 0u32;
+        loop {
+            attempt = attempt.saturating_add(1);
+            match call_openai_once(&client, api_key, &request) {
+                Ok(response) => return Ok(response),
+                Err(err) => {
+                    if !is_retryable_error(&err) || attempt >= MAX_RETRIES {
+                        return Err(err.into());
+                    }
+                    let delay = retry_delay(attempt);
+                    warn!("Retrying ({}/{}): {}", attempt, MAX_RETRIES, err);
+                    thread::sleep(delay);
+                }
+            }
+        }
+    }
+
+The existing error path in Agent::submit() already sends an AppEventKind::Error to the
+Controller. The Controller should then reset the UI processing state so the user isn't stuck.
+Currently, agent errors are only logged (controller.rs:99-101) -- add a
+ui.submit_processing_failed() call or equivalent to clear the processing flag and show an
+error message.
