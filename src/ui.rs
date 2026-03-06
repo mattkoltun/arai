@@ -336,6 +336,7 @@ impl Ui {
                         status_line: "Ready".to_string(),
                         instruction_editors: Vec::new(),
                         window_id: None,
+                        pulse_phase: 0.0,
                     },
                     Task::none(),
                 )
@@ -466,6 +467,8 @@ struct UiRuntime {
     status_line: String,
     instruction_editors: Vec<text_editor::Content>,
     window_id: Option<window::Id>,
+    /// Pulse phase in radians for the processing indicator animation.
+    pulse_phase: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -505,6 +508,19 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             } else {
                 false
             };
+
+            // Advance pulse animation while processing (~2.4 Hz cycle at 16ms ticks).
+            let is_processing = state
+                .ui
+                .state
+                .lock()
+                .map(|s| s.processing)
+                .unwrap_or(false);
+            if is_processing {
+                state.pulse_phase += 0.15; // ~2π every 42 ticks ≈ 0.67s cycle
+            } else {
+                state.pulse_phase = 0.0;
+            }
 
             if state.ui.repaint_requested.swap(false, Ordering::SeqCst)
                 && let Ok(mut ui_state) = state.ui.state.lock()
@@ -845,7 +861,14 @@ fn view_main<'a>(
 
     // send: E163
     let send_btn = if processing {
-        button(text("...").size(14).color(MUTED))
+        // Pulsate the send icon red while processing.
+        let t = state.pulse_phase.sin() * 0.5 + 0.5; // 0.0 – 1.0
+        let pulse_color = Color::from_rgb(
+            0.976 * t + 0.25 * (1.0 - t), // red channel: bright red ↔ dim
+            0.149 * t + 0.10 * (1.0 - t),  // green channel
+            0.447 * t + 0.15 * (1.0 - t),  // blue channel
+        );
+        button(icon('\u{E163}', 22.0).color(pulse_color))
             .style(icon_btn)
             .padding([8, 12])
     } else {
