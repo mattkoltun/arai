@@ -93,7 +93,7 @@ impl Recorder {
                         if let Ok(mut last) = last_chunk_cb.lock() {
                             *last = Some(chunk.clone());
                         }
-                        println!("Got f32 chunk of size {}", chunk.len());
+
                         let _ = audio_tx.send(AudioChunk {
                             sample_rate,
                             channels,
@@ -112,7 +112,7 @@ impl Recorder {
                         if let Ok(mut last) = last_chunk_cb.lock() {
                             *last = Some(chunk.clone());
                         }
-                        println!("Got i16 chunk of size {}", chunk.len());
+
                         let _ = audio_tx.send(AudioChunk {
                             sample_rate,
                             channels,
@@ -134,7 +134,7 @@ impl Recorder {
                                 shifted.clamp(i16::MIN as i32, i16::MAX as i32) as i16
                             })
                             .collect();
-                        println!("Got u16 chunk of size {}", chunk.len());
+
                         if let Ok(mut last) = last_chunk_cb.lock() {
                             *last = Some(chunk.clone());
                         }
