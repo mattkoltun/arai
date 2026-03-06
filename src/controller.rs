@@ -81,7 +81,18 @@ impl Controller {
         self.shutting_down.store(true, Ordering::SeqCst);
     }
 
+    /// Appends a transcription chunk to the accumulated text, adding a space
+    /// separator when needed.
+    fn append_transcription(accumulated: &mut String, text: &str) {
+        if !accumulated.is_empty() && !accumulated.ends_with(' ') {
+            accumulated.push(' ');
+        }
+        accumulated.push_str(text);
+    }
+
     pub fn run(self: Arc<Self>) {
+        let mut accumulated_transcription = String::new();
+
         while !self.shutting_down.load(Ordering::SeqCst) {
             if let Ok(app_rx) = self.app_event_rx.lock() {
                 for event in app_rx.try_iter() {
@@ -95,7 +106,10 @@ impl Controller {
                         }
                         (AppEventSource::Transcriber, AppEventKind::Transcription(text)) => {
                             debug!("Controller received transcript");
-                            self.app_state.append_transcription(&text);
+                            Self::append_transcription(&mut accumulated_transcription, &text);
+                            let _ = self.ui_update_tx.send(UiUpdate::TranscriptionUpdated(
+                                accumulated_transcription.clone(),
+                            ));
                         }
                         (AppEventSource::Agent, AppEventKind::Error(message)) => {
                             error!("Agent event: {message}");
@@ -103,7 +117,8 @@ impl Controller {
                         (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
                             self.process_text(text);
                         }
-                        (AppEventSource::Ui, AppEventKind::UiStartListening) => {
+                        (AppEventSource::Ui, AppEventKind::UiStartListening(text)) => {
+                            accumulated_transcription = text;
                             self.start_listening();
                         }
                         (AppEventSource::Ui, AppEventKind::UiStopListening) => {
@@ -111,9 +126,6 @@ impl Controller {
                         }
                         (AppEventSource::Ui, AppEventKind::UiSubmitText(text)) => {
                             self.submit_text(text);
-                        }
-                        (AppEventSource::Ui, AppEventKind::UiUpdateText(text)) => {
-                            self.app_state.set_transcribed_text(text);
                         }
                         (AppEventSource::Ui, AppEventKind::UiShutdown) => {
                             self.shutdown();
@@ -144,9 +156,6 @@ impl Controller {
             }
 
             let snapshot = self.app_state.snapshot();
-            let _ = self
-                .ui_update_tx
-                .send(UiUpdate::TranscriptionUpdated(snapshot.transcribed_text));
             let _ = self.ui_update_tx.send(UiUpdate::ConfigSnapshot {
                 agent_prompts: snapshot.agent_prompts,
                 default_prompt: snapshot.default_prompt,

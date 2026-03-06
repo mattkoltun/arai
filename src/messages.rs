@@ -37,10 +37,9 @@ pub enum AppEventKind {
     Stopped,
     Error(String),
     Transcription(String),
-    UiStartListening,
+    UiStartListening(String),
     UiStopListening,
     UiSubmitText(String),
-    UiUpdateText(String),
     UiShutdown,
     AgentResponse(String),
     UiUpdatePrompts {

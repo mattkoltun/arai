@@ -3,14 +3,12 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, Default)]
 pub struct AppStateSnapshot {
-    pub transcribed_text: String,
     pub agent_prompts: Vec<AgentPrompt>,
     pub default_prompt: usize,
     pub transcriber: TranscriberConfig,
 }
 
 pub struct AppState {
-    transcribed_text: Mutex<String>,
     agent_prompts: Mutex<Vec<AgentPrompt>>,
     default_prompt: Mutex<usize>,
     transcriber: Mutex<TranscriberConfig>,
@@ -25,7 +23,6 @@ impl AppState {
         let default = config.default_prompt;
         let transcriber = config.transcriber.clone();
         Arc::new(Self {
-            transcribed_text: Mutex::new(String::new()),
             agent_prompts: Mutex::new(prompts),
             default_prompt: Mutex::new(default),
             transcriber: Mutex::new(transcriber),
@@ -34,11 +31,6 @@ impl AppState {
     }
 
     pub fn snapshot(&self) -> AppStateSnapshot {
-        let text = self
-            .transcribed_text
-            .lock()
-            .map(|value| value.clone())
-            .unwrap_or_default();
         let prompts = self
             .agent_prompts
             .lock()
@@ -51,26 +43,9 @@ impl AppState {
             .map(|v| v.clone())
             .unwrap_or_default();
         AppStateSnapshot {
-            transcribed_text: text,
             agent_prompts: prompts,
             default_prompt: default,
             transcriber,
-        }
-    }
-
-    /// Replaces the transcribed text with the given value.
-    pub fn set_transcribed_text(&self, text: String) {
-        if let Ok(mut value) = self.transcribed_text.lock() {
-            *value = text;
-        }
-    }
-
-    pub(crate) fn append_transcription(&self, text: &str) {
-        if let Ok(mut value) = self.transcribed_text.lock() {
-            if !value.is_empty() && !value.ends_with(' ') {
-                value.push(' ');
-            }
-            value.push_str(text);
         }
     }
 
@@ -132,20 +107,10 @@ mod tests {
     }
 
     #[test]
-    fn appends_with_spaces_between_chunks() {
+    fn snapshot_returns_configured_prompts() {
         let state = AppState::new(test_config());
-        state.append_transcription("hello");
-        state.append_transcription("world");
-
-        assert_eq!(state.snapshot().transcribed_text, "hello world");
-    }
-
-    #[test]
-    fn does_not_add_extra_space_when_existing_chunk_already_ends_with_space() {
-        let state = AppState::new(test_config());
-        state.append_transcription("hello ");
-        state.append_transcription("world");
-
-        assert_eq!(state.snapshot().transcribed_text, "hello world");
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.agent_prompts.len(), 1);
+        assert_eq!(snapshot.agent_prompts[0].name, "default");
     }
 }

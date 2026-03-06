@@ -24,3 +24,5 @@ for sync_text_to_app_state() entirely -- the submit event already carries the te
 
 Option B is the lower-friction change. The key insight is that the Controller already receives
 the text in UiSubmitText(text) (controller.rs:111), so it never needs to read it from AppState.
+
+Implement Option B
