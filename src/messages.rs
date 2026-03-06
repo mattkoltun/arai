@@ -9,6 +9,21 @@ pub struct AudioChunk {
     pub is_final: bool,
 }
 
+/// Messages sent from the Controller to the UI via a dedicated channel.
+#[derive(Clone, Debug)]
+pub enum UiUpdate {
+    /// New transcription text arrived (full accumulated text).
+    TranscriptionUpdated(String),
+    /// Agent finished processing — here is the polished text.
+    AgentResponseReceived(String),
+    /// Snapshot of config state (prompts, transcriber settings).
+    ConfigSnapshot {
+        agent_prompts: Vec<AgentPrompt>,
+        default_prompt: usize,
+        transcriber: TranscriberConfig,
+    },
+}
+
 // #[derive(Clone, Debug)]
 pub enum AppEventSource {
     Recorder,

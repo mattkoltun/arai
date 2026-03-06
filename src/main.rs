@@ -33,6 +33,7 @@ fn main() {
     // Channels
     let (audio_tx, audio_rx) = mpsc::channel::<messages::AudioChunk>();
     let (app_event_tx, app_event_rx) = mpsc::channel::<messages::AppEvent>();
+    let (ui_update_tx, ui_update_rx) = mpsc::channel::<messages::UiUpdate>();
 
     let recorder = recorder::Recorder::new(audio_tx, app_event_tx.clone());
     let transcriber =
@@ -42,7 +43,7 @@ fn main() {
     // Global hotkey must be registered on the main thread (macOS requirement).
     let hotkey_handle = global_hotkey::HotkeyHandle::register(&config.global_hotkey);
 
-    let ui = ui::Ui::new(app_event_tx.clone(), hotkey_handle);
+    let ui = ui::Ui::new(app_event_tx.clone(), hotkey_handle, ui_update_rx);
     let app_state = app_state::AppState::new(config);
     let controller = std::sync::Arc::new(controller::Controller::new(
         recorder,
@@ -50,7 +51,7 @@ fn main() {
         app_event_rx,
         agent,
         app_state,
-        ui.clone(),
+        ui_update_tx,
     ));
     let controller_shutdown = controller.clone();
 

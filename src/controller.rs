@@ -1,10 +1,9 @@
 use crate::agent::Agent;
 use crate::app_state::AppStateHandle;
-use crate::channels::AppEventReceiver;
-use crate::messages::{AppEventKind, AppEventSource};
+use crate::channels::{AppEventReceiver, UiUpdateSender};
+use crate::messages::{AppEventKind, AppEventSource, UiUpdate};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
-use crate::ui::Ui;
 use log::{debug, error, info};
 use std::sync::{
     Arc, Mutex,
@@ -19,7 +18,7 @@ pub struct Controller {
     app_event_rx: Mutex<AppEventReceiver>,
     agent: Agent,
     app_state: AppStateHandle,
-    ui: Ui,
+    ui_update_tx: UiUpdateSender,
     shutting_down: AtomicBool,
 }
 
@@ -30,7 +29,7 @@ impl Controller {
         app_event_rx: AppEventReceiver,
         agent: Agent,
         app_state: AppStateHandle,
-        ui: Ui,
+        ui_update_tx: UiUpdateSender,
     ) -> Self {
         Self {
             recorder: Mutex::new(Some(recorder)),
@@ -38,7 +37,7 @@ impl Controller {
             app_event_rx: Mutex::new(app_event_rx),
             agent,
             app_state,
-            ui,
+            ui_update_tx,
             shutting_down: AtomicBool::new(false),
         }
     }
@@ -63,7 +62,9 @@ impl Controller {
 
     pub fn process_text(&self, text: String) {
         debug!("Controller processing text");
-        self.ui.submit_processed_text(text);
+        let _ = self
+            .ui_update_tx
+            .send(UiUpdate::AgentResponseReceived(text));
     }
 
     pub fn submit_text(&self, text: String) {
@@ -143,7 +144,14 @@ impl Controller {
             }
 
             let snapshot = self.app_state.snapshot();
-            self.ui.refresh_with_state(snapshot);
+            let _ = self
+                .ui_update_tx
+                .send(UiUpdate::TranscriptionUpdated(snapshot.transcribed_text));
+            let _ = self.ui_update_tx.send(UiUpdate::ConfigSnapshot {
+                agent_prompts: snapshot.agent_prompts,
+                default_prompt: snapshot.default_prompt,
+                transcriber: snapshot.transcriber,
+            });
             thread::sleep(Duration::from_millis(10));
         }
 

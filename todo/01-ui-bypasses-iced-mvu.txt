@@ -20,7 +20,7 @@ Consequences:
 SOLUTION:
 
 Replace the mutex-based push with an iced Subscription that reads from a channel. Create an
-mpsc or tokio channel from Controller to UI. In the iced subscription function, yield Message
+mpsc channel from Controller to UI. In the iced subscription function, yield Message
 variants (e.g., Message::TranscriptionUpdated(String), Message::AgentResponseReceived(String))
 when data arrives on the channel. This lets iced drive state changes through its own update()
 function, eliminates the shared UiState mutex for cross-thread communication, and removes the
