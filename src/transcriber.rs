@@ -85,7 +85,6 @@ fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender, config: Transcr
             match transcribe_audio(&ctx, &buffer) {
                 Ok(text) => {
                     if !text.is_empty() {
-                        println!("Transcribed: {}", text);
                         debug!("Transcription result: {}", text);
                         let _ = app_event_tx.send(AppEvent {
                             source: AppEventSource::Transcriber,
