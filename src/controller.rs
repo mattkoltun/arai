@@ -64,9 +64,9 @@ impl Controller {
         let _ = self.recorder.start();
     }
 
-    fn stop_listening(&mut self) {
-        info!("Controller stopping recorder");
-        let _ = self.recorder.stop();
+    fn stop_listening(&self) {
+        info!("Controller signaling recorder to stop");
+        self.recorder.stop_signal();
     }
 
     fn process_text(&self, text: String) {
@@ -103,6 +103,10 @@ impl Controller {
             let events: Vec<_> = self.app_event_rx.try_iter().collect();
             for event in events {
                 match (event.source, event.kind) {
+                    (AppEventSource::Recorder, AppEventKind::Stopped) => {
+                        info!("Recorder stopped, joining handle");
+                        self.recorder.join_handle();
+                    }
                     (AppEventSource::Recorder, AppEventKind::Error(message)) => {
                         error!("Recorder event: {message}");
                         // TODO: implement recorder error handling (e.g., restart recorder or update UI)
@@ -167,7 +171,7 @@ impl Controller {
         }
 
         info!("Controller shutting down");
-        let _ = self.recorder.stop();
+        self.recorder.stop();
         drop(self.transcriber);
     }
 }
