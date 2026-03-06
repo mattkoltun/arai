@@ -396,14 +396,7 @@ impl UiRuntime {
         });
     }
 
-    fn sync_text_to_app_state(&self) {
-        if !self.listening && !self.processing {
-            self.send_event(AppEventKind::UiUpdateText(self.input.clone()));
-        }
-    }
-
     fn toggle_listen(&mut self) {
-        self.sync_text_to_app_state();
         if self.processing {
             return;
         }
@@ -414,14 +407,13 @@ impl UiRuntime {
             self.status_line = "Ready".to_string();
         } else {
             debug!("UI starting listen");
-            self.send_event(AppEventKind::UiStartListening);
+            self.send_event(AppEventKind::UiStartListening(self.input.clone()));
             self.listening = true;
             self.status_line = "Listening...".to_string();
         }
     }
 
     fn submit(&mut self) {
-        self.sync_text_to_app_state();
         if self.processing || self.listening || self.input.trim().is_empty() {
             return;
         }
@@ -521,8 +513,6 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             ])
         }
         Message::OpenConfig => {
-            // Sync edits when user clicks away from editor
-            state.sync_text_to_app_state();
             state.config_prompts = state
                 .snapshot_prompts
                 .iter()
