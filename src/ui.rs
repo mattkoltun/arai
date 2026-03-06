@@ -431,19 +431,6 @@ impl UiRuntime {
         debug!("UI submit requested");
         self.send_event(AppEventKind::UiSubmitText(self.input.clone()));
     }
-
-    fn copy_processed(&mut self) -> Option<String> {
-        self.sync_text_to_app_state();
-        if self.processing {
-            return None;
-        }
-        let processed = self.processed_text.clone();
-        if processed.is_some() {
-            debug!("UI copying processed text");
-            self.send_event(AppEventKind::UiShutdown);
-        }
-        processed
-    }
 }
 
 fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
@@ -520,10 +507,18 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Copy => {
-            if let Some(text) = state.copy_processed() {
-                return iced::clipboard::write::<Message>(text);
+            if state.processing || state.listening || state.input.trim().is_empty() {
+                return Task::none();
             }
-            Task::none()
+            debug!("UI copying text to clipboard");
+            let minimize = state
+                .window_id
+                .map(|id| window::minimize(id, true))
+                .unwrap_or(Task::none());
+            Task::batch([
+                iced::clipboard::write::<Message>(state.input.clone()),
+                minimize,
+            ])
         }
         Message::OpenConfig => {
             // Sync edits when user clicks away from editor
@@ -725,7 +720,7 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
         state,
         state.listening,
         state.processing,
-        state.processed_text.is_some(),
+        !state.input.trim().is_empty(),
         state.input.chars().count(),
     )
 }
@@ -734,7 +729,7 @@ fn view_main<'a>(
     state: &'a UiRuntime,
     listening: bool,
     processing: bool,
-    has_processed: bool,
+    has_text: bool,
     char_count: usize,
 ) -> Element<'a, Message> {
     // close: E5CD
@@ -794,7 +789,7 @@ fn view_main<'a>(
     let copy_btn = button(icon('\u{E14D}', 22.0))
         .style(icon_btn)
         .padding([8, 12])
-        .on_press_maybe((has_processed && !processing && !listening).then_some(Message::Copy));
+        .on_press_maybe((has_text && !processing && !listening).then_some(Message::Copy));
 
     // settings: E8B8
     let settings_btn = button(icon('\u{E8B8}', 22.0))
