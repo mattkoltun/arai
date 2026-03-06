@@ -5,24 +5,38 @@ use crate::messages::{AppEventKind, AppEventSource, UiUpdate};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
 use log::{debug, error, info};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
+/// Lightweight handle that allows external code (e.g. main) to signal shutdown
+/// without holding the entire Controller behind an Arc.
+pub struct ShutdownHandle {
+    flag: Arc<AtomicBool>,
+}
+
+impl ShutdownHandle {
+    /// Signals the Controller's run loop to stop.
+    pub fn shutdown(&self) {
+        info!("Controller shutdown requested");
+        self.flag.store(true, Ordering::SeqCst);
+    }
+}
+
 pub struct Controller {
-    recorder: Mutex<Option<Recorder>>,
-    transcriber: Mutex<Option<Transcriber>>,
-    app_event_rx: Mutex<AppEventReceiver>,
+    recorder: Recorder,
+    transcriber: Transcriber,
+    app_event_rx: AppEventReceiver,
     agent: Agent,
     app_state: AppStateHandle,
     ui_update_tx: UiUpdateSender,
-    shutting_down: AtomicBool,
+    shutting_down: Arc<AtomicBool>,
 }
 
 impl Controller {
+    /// Creates a Controller and a [`ShutdownHandle`] that can trigger graceful
+    /// shutdown from another thread.
     pub fn new(
         recorder: Recorder,
         transcriber: Transcriber,
@@ -30,55 +44,45 @@ impl Controller {
         agent: Agent,
         app_state: AppStateHandle,
         ui_update_tx: UiUpdateSender,
-    ) -> Self {
-        Self {
-            recorder: Mutex::new(Some(recorder)),
-            transcriber: Mutex::new(Some(transcriber)),
-            app_event_rx: Mutex::new(app_event_rx),
+    ) -> (Self, ShutdownHandle) {
+        let flag = Arc::new(AtomicBool::new(false));
+        let handle = ShutdownHandle { flag: flag.clone() };
+        let controller = Self {
+            recorder,
+            transcriber,
+            app_event_rx,
             agent,
             app_state,
             ui_update_tx,
-            shutting_down: AtomicBool::new(false),
-        }
+            shutting_down: flag,
+        };
+        (controller, handle)
     }
 
-    pub fn start_listening(&self) {
-        if let Ok(mut recorder) = self.recorder.lock()
-            && let Some(recorder) = recorder.as_mut()
-        {
-            info!("Controller starting recorder");
-            let _ = recorder.start();
-        }
+    fn start_listening(&mut self) {
+        info!("Controller starting recorder");
+        let _ = self.recorder.start();
     }
 
-    pub fn stop_listening(&self) {
-        if let Ok(mut recorder) = self.recorder.lock()
-            && let Some(recorder) = recorder.as_mut()
-        {
-            info!("Controller stopping recorder");
-            let _ = recorder.stop();
-        }
+    fn stop_listening(&mut self) {
+        info!("Controller stopping recorder");
+        let _ = self.recorder.stop();
     }
 
-    pub fn process_text(&self, text: String) {
+    fn process_text(&self, text: String) {
         debug!("Controller processing text");
         let _ = self
             .ui_update_tx
             .send(UiUpdate::AgentResponseReceived(text));
     }
 
-    pub fn submit_text(&self, text: String) {
+    fn submit_text(&self, text: String) {
         let instruction = self.app_state.agent_instruction();
         debug!(
             "Controller submitting text with instruction: {}",
             &instruction[..instruction.len().min(80)]
         );
         self.agent.submit(instruction, text);
-    }
-
-    pub fn shutdown(&self) {
-        info!("Controller shutdown requested");
-        self.shutting_down.store(true, Ordering::SeqCst);
     }
 
     /// Appends a transcription chunk to the accumulated text, adding a space
@@ -90,67 +94,65 @@ impl Controller {
         accumulated.push_str(text);
     }
 
-    pub fn run(self: Arc<Self>) {
+    /// Runs the Controller event loop, consuming `self`. The loop exits when
+    /// the associated [`ShutdownHandle`] signals shutdown.
+    pub fn run(mut self) {
         let mut accumulated_transcription = String::new();
 
         while !self.shutting_down.load(Ordering::SeqCst) {
-            if let Ok(app_rx) = self.app_event_rx.lock() {
-                for event in app_rx.try_iter() {
-                    match (event.source, event.kind) {
-                        (AppEventSource::Recorder, AppEventKind::Error(message)) => {
-                            error!("Recorder event: {message}");
-                            // TODO: implement recorder error handling (e.g., restart recorder or update UI)
-                        }
-                        (AppEventSource::Transcriber, AppEventKind::Error(message)) => {
-                            error!("Transcriber event: {message}");
-                        }
-                        (AppEventSource::Transcriber, AppEventKind::Transcription(text)) => {
-                            debug!("Controller received transcript");
-                            Self::append_transcription(&mut accumulated_transcription, &text);
-                            let _ = self.ui_update_tx.send(UiUpdate::TranscriptionUpdated(
-                                accumulated_transcription.clone(),
-                            ));
-                        }
-                        (AppEventSource::Agent, AppEventKind::Error(message)) => {
-                            error!("Agent event: {message}");
-                        }
-                        (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
-                            self.process_text(text);
-                        }
-                        (AppEventSource::Ui, AppEventKind::UiStartListening(text)) => {
-                            accumulated_transcription = text;
-                            self.start_listening();
-                        }
-                        (AppEventSource::Ui, AppEventKind::UiStopListening) => {
-                            self.stop_listening();
-                        }
-                        (AppEventSource::Ui, AppEventKind::UiSubmitText(text)) => {
-                            self.submit_text(text);
-                        }
-                        (AppEventSource::Ui, AppEventKind::UiShutdown) => {
-                            self.shutdown();
-                        }
-                        (
-                            AppEventSource::Ui,
-                            AppEventKind::UiUpdatePrompts {
-                                prompts,
-                                default_prompt,
-                            },
-                        ) => {
-                            info!("Controller updating agent prompts");
-                            self.app_state.update_prompts(prompts, default_prompt);
-                        }
-                        (
-                            AppEventSource::Ui,
-                            AppEventKind::UiUpdateTranscriber(transcriber_config),
-                        ) => {
-                            info!("Controller updating transcriber config");
-                            self.app_state.update_transcriber(transcriber_config);
-                        }
-                        (source, kind) => {
-                            let _ = (source, kind);
-                            // TODO: handle other app events
-                        }
+            let events: Vec<_> = self.app_event_rx.try_iter().collect();
+            for event in events {
+                match (event.source, event.kind) {
+                    (AppEventSource::Recorder, AppEventKind::Error(message)) => {
+                        error!("Recorder event: {message}");
+                        // TODO: implement recorder error handling (e.g., restart recorder or update UI)
+                    }
+                    (AppEventSource::Transcriber, AppEventKind::Error(message)) => {
+                        error!("Transcriber event: {message}");
+                    }
+                    (AppEventSource::Transcriber, AppEventKind::Transcription(text)) => {
+                        debug!("Controller received transcript");
+                        Self::append_transcription(&mut accumulated_transcription, &text);
+                        let _ = self.ui_update_tx.send(UiUpdate::TranscriptionUpdated(
+                            accumulated_transcription.clone(),
+                        ));
+                    }
+                    (AppEventSource::Agent, AppEventKind::Error(message)) => {
+                        error!("Agent event: {message}");
+                    }
+                    (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
+                        self.process_text(text);
+                    }
+                    (AppEventSource::Ui, AppEventKind::UiStartListening(text)) => {
+                        accumulated_transcription = text;
+                        self.start_listening();
+                    }
+                    (AppEventSource::Ui, AppEventKind::UiStopListening) => {
+                        self.stop_listening();
+                    }
+                    (AppEventSource::Ui, AppEventKind::UiSubmitText(text)) => {
+                        self.submit_text(text);
+                    }
+                    (AppEventSource::Ui, AppEventKind::UiShutdown) => {
+                        self.shutting_down.store(true, Ordering::SeqCst);
+                    }
+                    (
+                        AppEventSource::Ui,
+                        AppEventKind::UiUpdatePrompts {
+                            prompts,
+                            default_prompt,
+                        },
+                    ) => {
+                        info!("Controller updating agent prompts");
+                        self.app_state.update_prompts(prompts, default_prompt);
+                    }
+                    (AppEventSource::Ui, AppEventKind::UiUpdateTranscriber(transcriber_config)) => {
+                        info!("Controller updating transcriber config");
+                        self.app_state.update_transcriber(transcriber_config);
+                    }
+                    (source, kind) => {
+                        let _ = (source, kind);
+                        // TODO: handle other app events
                     }
                 }
             }
@@ -165,13 +167,7 @@ impl Controller {
         }
 
         info!("Controller shutting down");
-        if let Ok(mut recorder) = self.recorder.lock()
-            && let Some(mut recorder) = recorder.take()
-        {
-            let _ = recorder.stop();
-        }
-        if let Ok(mut transcriber) = self.transcriber.lock() {
-            transcriber.take();
-        }
+        let _ = self.recorder.stop();
+        drop(self.transcriber);
     }
 }

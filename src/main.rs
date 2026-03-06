@@ -45,23 +45,21 @@ fn main() {
 
     let ui = ui::Ui::new(app_event_tx.clone(), hotkey_handle, ui_update_rx);
     let app_state = app_state::AppState::new(config);
-    let controller = std::sync::Arc::new(controller::Controller::new(
+    let (controller, shutdown_handle) = controller::Controller::new(
         recorder,
         transcriber,
         app_event_rx,
         agent,
         app_state,
         ui_update_tx,
-    ));
-    let controller_shutdown = controller.clone();
+    );
 
-    let controller_runner = controller.clone();
-    let controller_handle = thread::spawn(move || controller_runner.run());
+    let controller_handle = thread::spawn(move || controller.run());
 
     if let Err(err) = ui.run() {
         log::error!("Failed to launch UI: {err}");
     }
-    controller_shutdown.shutdown();
+    shutdown_handle.shutdown();
 
     let _ = controller_handle.join();
     log::info!("Arai shutdown complete");
