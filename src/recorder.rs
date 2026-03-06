@@ -200,17 +200,24 @@ impl Recorder {
         Ok(())
     }
 
-    pub fn stop(&mut self) -> Result<(), RecorderError> {
-        if self.handle.is_none() {
-            return Ok(());
-        }
-
+    /// Signals the recorder thread to stop without blocking. The thread will
+    /// send a `Recorder::Stopped` event when it finishes.
+    pub fn stop_signal(&self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+    }
 
+    /// Joins the recorder thread handle, blocking until it finishes. Call this
+    /// after receiving the `Stopped` event or during shutdown.
+    pub fn join_handle(&mut self) {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+    }
 
-        Ok(())
+    /// Signals the recorder thread to stop and blocks until it finishes. Use
+    /// this during application shutdown when blocking is acceptable.
+    pub fn stop(&mut self) {
+        self.stop_signal();
+        self.join_handle();
     }
 }
