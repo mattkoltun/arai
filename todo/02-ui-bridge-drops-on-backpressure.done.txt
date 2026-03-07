@@ -1,0 +1,34 @@
+ISSUE: UI subscription bridge silently drops updates when channel is full
+
+The bridge thread in ui.rs uses try_send() into the iced channel
+(capacity 100). If the UI is slow to process messages (e.g. during a
+heavy redraw or config panel interaction), try_send() returns Err and
+the bridge thread exits permanently. After that, no more transcription
+or agent responses reach the UI — the app appears frozen.
+
+There is no log message, no recovery, and no indication to the user
+that updates stopped flowing.
+
+FILES: src/ui.rs (subscription function, bridge thread)
+
+FIX: Use blocking send instead of try_send so the bridge thread
+applies backpressure to the controller rather than dropping messages.
+The iced channel sender supports async send via futures — use
+futures::executor::block_on(sender.send(...)) in the bridge thread.
+This blocks the bridge thread (acceptable since it's dedicated) until
+the iced runtime consumes messages.
+
+Add the futures crate as a dependency (or use pollster for a minimal
+block_on). Also add a log::warn on send failure so the exit is at
+least observable.
+
+  std::thread::spawn(move || {
+      while let Ok(update) = rx.recv() {
+          if futures::executor::block_on(
+              sender.send(Message::UiUpdateReceived(update)),
+          ).is_err() {
+              log::warn!("UI channel closed, bridge exiting");
+              break;
+          }
+      }
+  });

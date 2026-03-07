@@ -135,6 +135,7 @@ name = "arai"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "futures",
  "global-hotkey",
  "iced",
  "log",
