@@ -177,7 +177,10 @@ impl Recorder {
                 thread::sleep(Duration::from_millis(20));
             }
 
-            debug!("Recorder stopping");
+            debug!("Recorder stopping stream");
+            drop(stream);
+
+            debug!("Recorder sending final chunk");
             if let Ok(mut last) = last_chunk.lock()
                 && let Some(samples) = last.take()
             {
