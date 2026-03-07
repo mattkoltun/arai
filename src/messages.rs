@@ -16,6 +16,8 @@ pub enum UiUpdate {
     TranscriptionUpdated(String),
     /// Agent finished processing — here is the polished text.
     AgentResponseReceived(String),
+    /// Agent processing failed — contains the error message.
+    ProcessingFailed(String),
     /// Snapshot of config state (prompts, transcriber settings).
     ConfigSnapshot {
         agent_prompts: Vec<AgentPrompt>,

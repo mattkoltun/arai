@@ -123,6 +123,7 @@ impl Controller {
                     }
                     (AppEventSource::Agent, AppEventKind::Error(message)) => {
                         error!("Agent event: {message}");
+                        let _ = self.ui_update_tx.send(UiUpdate::ProcessingFailed(message));
                     }
                     (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
                         self.process_text(text);
