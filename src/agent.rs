@@ -10,6 +10,7 @@ use std::time::Duration;
 const OPENAI_MODEL: &str = "gpt-4o-mini";
 const REQUEST_TIMEOUT_SECS: u64 = 60;
 const MAX_RETRY_BACKOFF_SECS: u64 = 30;
+const MAX_RETRIES: u32 = 5;
 
 #[derive(Clone)]
 pub struct Agent {
@@ -71,14 +72,15 @@ fn call_openai_with_retry(
         match call_openai_once(&client, api_key, &request) {
             Ok(response) => return Ok(response),
             Err(err) => {
-                if !is_retryable_error(&err) {
+                if !is_retryable_error(&err) || attempt >= MAX_RETRIES {
                     return Err(err);
                 }
 
                 let delay = retry_delay(attempt);
                 warn!(
-                    "OpenAI request throttled/transient failure (attempt {}): {}. Retrying in {}s",
+                    "OpenAI request failed (attempt {}/{}): {}. Retrying in {}s",
                     attempt,
+                    MAX_RETRIES,
                     err,
                     delay.as_secs()
                 );

@@ -471,6 +471,11 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     state.editor = text_editor::Content::with_text(&state.input);
                     state.status_line = "Ready".to_string();
                 }
+                UiUpdate::ProcessingFailed(message) => {
+                    log::error!("Processing failed: {message}");
+                    state.processing = false;
+                    state.status_line = "Error — try again".to_string();
+                }
                 UiUpdate::ConfigSnapshot {
                     agent_prompts,
                     default_prompt,
