@@ -36,8 +36,12 @@ fn main() {
     let (ui_update_tx, ui_update_rx) = mpsc::channel::<messages::UiUpdate>();
 
     let recorder = recorder::Recorder::new(audio_tx, app_event_tx.clone());
-    let transcriber =
+    let mut transcriber =
         transcriber::Transcriber::new(audio_rx, app_event_tx.clone(), config.transcriber.clone());
+    if let Err(err) = transcriber.start() {
+        eprintln!("Transcriber failed to start: {err}");
+        return;
+    }
     let agent = agent::Agent::new(app_event_tx.clone(), config.open_api_key.clone());
 
     // Global hotkey must be registered on the main thread (macOS requirement).
