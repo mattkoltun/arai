@@ -8,11 +8,22 @@ pub struct AppStateSnapshot {
     pub transcriber: TranscriberConfig,
 }
 
+/// Internal state protected by a single mutex to guarantee consistent reads
+/// and writes across all fields.
+struct AppStateInner {
+    agent_prompts: Vec<AgentPrompt>,
+    default_prompt: usize,
+    transcriber: TranscriberConfig,
+    config: Config,
+}
+
+/// Shared application state.
+///
+/// All mutable fields live inside a single `Mutex<AppStateInner>` so that
+/// every read or write sees a consistent view — no window where
+/// `default_prompt` can point past the end of `agent_prompts`.
 pub struct AppState {
-    agent_prompts: Mutex<Vec<AgentPrompt>>,
-    default_prompt: Mutex<usize>,
-    transcriber: Mutex<TranscriberConfig>,
-    config: Mutex<Config>,
+    inner: Mutex<AppStateInner>,
 }
 
 pub type AppStateHandle = Arc<AppState>;
@@ -23,73 +34,50 @@ impl AppState {
         let default = config.default_prompt;
         let transcriber = config.transcriber.clone();
         Arc::new(Self {
-            agent_prompts: Mutex::new(prompts),
-            default_prompt: Mutex::new(default),
-            transcriber: Mutex::new(transcriber),
-            config: Mutex::new(config),
+            inner: Mutex::new(AppStateInner {
+                agent_prompts: prompts,
+                default_prompt: default,
+                transcriber,
+                config,
+            }),
         })
     }
 
     pub fn snapshot(&self) -> AppStateSnapshot {
-        let prompts = self
-            .agent_prompts
-            .lock()
-            .expect("agent_prompts mutex poisoned")
-            .clone();
-        let default = *self
-            .default_prompt
-            .lock()
-            .expect("default_prompt mutex poisoned");
-        let transcriber = self
-            .transcriber
-            .lock()
-            .expect("transcriber mutex poisoned")
-            .clone();
+        let inner = self.inner.lock().expect("app_state mutex poisoned");
         AppStateSnapshot {
-            agent_prompts: prompts,
-            default_prompt: default,
-            transcriber,
+            agent_prompts: inner.agent_prompts.clone(),
+            default_prompt: inner.default_prompt,
+            transcriber: inner.transcriber.clone(),
         }
     }
 
     pub fn update_prompts(&self, prompts: Vec<AgentPrompt>, default: usize) {
-        *self
-            .agent_prompts
-            .lock()
-            .expect("agent_prompts mutex poisoned") = prompts.clone();
+        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
         let clamped = if default < prompts.len() { default } else { 0 };
-        *self
-            .default_prompt
-            .lock()
-            .expect("default_prompt mutex poisoned") = clamped;
-        let mut cfg = self.config.lock().expect("config mutex poisoned");
-        cfg.agent_prompts = prompts;
-        cfg.default_prompt = clamped;
-        if let Err(e) = cfg.save() {
+        inner.agent_prompts = prompts.clone();
+        inner.default_prompt = clamped;
+        inner.config.agent_prompts = prompts;
+        inner.config.default_prompt = clamped;
+        if let Err(e) = inner.config.save() {
             log::error!("Failed to save config: {e}");
         }
     }
 
     pub fn update_transcriber(&self, transcriber_config: TranscriberConfig) {
-        *self.transcriber.lock().expect("transcriber mutex poisoned") = transcriber_config.clone();
-        let mut cfg = self.config.lock().expect("config mutex poisoned");
-        cfg.transcriber = transcriber_config;
-        if let Err(e) = cfg.save() {
+        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
+        inner.transcriber = transcriber_config.clone();
+        inner.config.transcriber = transcriber_config;
+        if let Err(e) = inner.config.save() {
             log::error!("Failed to save config: {e}");
         }
     }
 
     pub fn agent_instruction(&self) -> String {
-        let prompts = self
+        let inner = self.inner.lock().expect("app_state mutex poisoned");
+        inner
             .agent_prompts
-            .lock()
-            .expect("agent_prompts mutex poisoned");
-        let default = *self
-            .default_prompt
-            .lock()
-            .expect("default_prompt mutex poisoned");
-        prompts
-            .get(default)
+            .get(inner.default_prompt)
             .map(|a| a.instruction.clone())
             .unwrap_or_default()
     }
