@@ -3,7 +3,6 @@ use crate::config::{AgentPrompt, TranscriberConfig};
 use crate::global_hotkey::HotkeyHandle;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, UiUpdate};
 use iced::font::Family;
-use iced::futures::{SinkExt, StreamExt};
 use iced::theme::Palette;
 use iced::widget::{
     Column, button, column, container, row, scrollable, text, text_editor, text_input,
@@ -257,6 +256,15 @@ enum ConfigTab {
     Advanced,
 }
 
+// ── App mode state machine ──────────────────────────────────────────
+#[derive(Clone, Debug, Default, PartialEq)]
+enum AppMode {
+    #[default]
+    Idle,
+    Listening,
+    Processing,
+}
+
 const MAX_PROMPTS: usize = 10;
 
 struct TranscriberFields {
@@ -314,8 +322,7 @@ impl Ui {
                         pulse_phase: 0.0,
                         input: String::new(),
                         processed_text: None,
-                        processing: false,
-                        listening: false,
+                        mode: AppMode::Idle,
                         config_open: false,
                         config_prompts: Vec::new(),
                         config_default: 0,
@@ -347,8 +354,7 @@ struct UiRuntime {
     // State previously in UiState:
     input: String,
     processed_text: Option<String>,
-    processing: bool,
-    listening: bool,
+    mode: AppMode,
     config_open: bool,
     config_prompts: Vec<PromptEntry>,
     config_default: usize,
@@ -397,27 +403,27 @@ impl UiRuntime {
     }
 
     fn toggle_listen(&mut self) {
-        if self.processing {
+        if self.mode == AppMode::Processing {
             return;
         }
-        if self.listening {
+        if self.mode == AppMode::Listening {
             debug!("UI stopping listen");
             self.send_event(AppEventKind::UiStopListening);
-            self.listening = false;
+            self.mode = AppMode::Idle;
             self.status_line = "Ready".to_string();
         } else {
             debug!("UI starting listen");
             self.send_event(AppEventKind::UiStartListening(self.input.clone()));
-            self.listening = true;
+            self.mode = AppMode::Listening;
             self.status_line = "Listening...".to_string();
         }
     }
 
     fn submit(&mut self) {
-        if self.processing || self.listening || self.input.trim().is_empty() {
+        if self.mode != AppMode::Idle || self.input.trim().is_empty() {
             return;
         }
-        self.processing = true;
+        self.mode = AppMode::Processing;
         self.processed_text = None;
         self.status_line = "Processing...".to_string();
         debug!("UI submit requested");
@@ -439,7 +445,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             };
 
             // Advance pulse animation while processing (~2.4 Hz cycle at 16ms ticks).
-            if state.processing {
+            if state.mode == AppMode::Processing {
                 state.pulse_phase += 0.15;
             } else {
                 state.pulse_phase = 0.0;
@@ -458,7 +464,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         Message::UiUpdateReceived(update) => {
             match update {
                 UiUpdate::TranscriptionUpdated(text) => {
-                    if state.listening && state.input != text {
+                    if state.mode == AppMode::Listening && state.input != text {
                         state.input = text;
                         state.editor = text_editor::Content::with_text(&state.input);
                         state.status_line = "Listening...".to_string();
@@ -467,13 +473,13 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 UiUpdate::AgentResponseReceived(text) => {
                     state.processed_text = Some(text.clone());
                     state.input = text;
-                    state.processing = false;
+                    state.mode = AppMode::Idle;
                     state.editor = text_editor::Content::with_text(&state.input);
                     state.status_line = "Ready".to_string();
                 }
                 UiUpdate::ProcessingFailed(message) => {
                     log::error!("Processing failed: {message}");
-                    state.processing = false;
+                    state.mode = AppMode::Idle;
                     state.status_line = "Error — try again".to_string();
                 }
                 UiUpdate::ConfigSnapshot {
@@ -490,7 +496,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::EditorAction(action) => {
             state.editor.perform(action);
-            if !state.processing && !state.listening {
+            if state.mode == AppMode::Idle {
                 state.input = state.editor.text();
             }
             Task::none()
@@ -504,7 +510,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Copy => {
-            if state.processing || state.listening || state.input.trim().is_empty() {
+            if state.mode != AppMode::Idle || state.input.trim().is_empty() {
                 return Task::none();
             }
             debug!("UI copying text to clipboard");
@@ -711,10 +717,13 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
         );
     }
 
+    let listening = state.mode == AppMode::Listening;
+    let processing = state.mode == AppMode::Processing;
+
     view_main(
         state,
-        state.listening,
-        state.processing,
+        listening,
+        processing,
         !state.input.trim().is_empty(),
         state.input.chars().count(),
     )
@@ -1054,23 +1063,13 @@ fn subscription(state: &UiRuntime) -> Subscription<Message> {
                     guard.take()
                 };
                 if let Some(rx) = rx {
-                    let (bridge_tx, mut bridge_rx) = iced::futures::channel::mpsc::unbounded();
                     std::thread::spawn(move || {
                         while let Ok(update) = rx.recv() {
-                            if bridge_tx.unbounded_send(update).is_err() {
+                            if sender.try_send(Message::UiUpdateReceived(update)).is_err() {
                                 break;
                             }
                         }
                     });
-                    while let Some(update) = bridge_rx.next().await {
-                        if sender
-                            .send(Message::UiUpdateReceived(update))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
                 }
                 std::future::pending::<()>().await;
             }),

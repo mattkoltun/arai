@@ -34,14 +34,17 @@ impl AppState {
         let prompts = self
             .agent_prompts
             .lock()
-            .map(|v| v.clone())
-            .unwrap_or_default();
-        let default = self.default_prompt.lock().map(|g| *g).unwrap_or(0);
+            .expect("agent_prompts mutex poisoned")
+            .clone();
+        let default = *self
+            .default_prompt
+            .lock()
+            .expect("default_prompt mutex poisoned");
         let transcriber = self
             .transcriber
             .lock()
-            .map(|v| v.clone())
-            .unwrap_or_default();
+            .expect("transcriber mutex poisoned")
+            .clone();
         AppStateSnapshot {
             agent_prompts: prompts,
             default_prompt: default,
@@ -50,39 +53,44 @@ impl AppState {
     }
 
     pub fn update_prompts(&self, prompts: Vec<AgentPrompt>, default: usize) {
-        if let Ok(mut p) = self.agent_prompts.lock() {
-            *p = prompts.clone();
-        }
+        *self
+            .agent_prompts
+            .lock()
+            .expect("agent_prompts mutex poisoned") = prompts.clone();
         let clamped = if default < prompts.len() { default } else { 0 };
-        if let Ok(mut d) = self.default_prompt.lock() {
-            *d = clamped;
-        }
-        if let Ok(mut cfg) = self.config.lock() {
-            cfg.agent_prompts = prompts;
-            cfg.default_prompt = clamped;
-            if let Err(e) = cfg.save() {
-                log::error!("Failed to save config: {e}");
-            }
+        *self
+            .default_prompt
+            .lock()
+            .expect("default_prompt mutex poisoned") = clamped;
+        let mut cfg = self.config.lock().expect("config mutex poisoned");
+        cfg.agent_prompts = prompts;
+        cfg.default_prompt = clamped;
+        if let Err(e) = cfg.save() {
+            log::error!("Failed to save config: {e}");
         }
     }
 
     pub fn update_transcriber(&self, transcriber_config: TranscriberConfig) {
-        if let Ok(mut t) = self.transcriber.lock() {
-            *t = transcriber_config.clone();
-        }
-        if let Ok(mut cfg) = self.config.lock() {
-            cfg.transcriber = transcriber_config;
-            if let Err(e) = cfg.save() {
-                log::error!("Failed to save config: {e}");
-            }
+        *self.transcriber.lock().expect("transcriber mutex poisoned") = transcriber_config.clone();
+        let mut cfg = self.config.lock().expect("config mutex poisoned");
+        cfg.transcriber = transcriber_config;
+        if let Err(e) = cfg.save() {
+            log::error!("Failed to save config: {e}");
         }
     }
 
     pub fn agent_instruction(&self) -> String {
-        let prompts = self.agent_prompts.lock().ok();
-        let default = self.default_prompt.lock().map(|g| *g).unwrap_or(0);
+        let prompts = self
+            .agent_prompts
+            .lock()
+            .expect("agent_prompts mutex poisoned");
+        let default = *self
+            .default_prompt
+            .lock()
+            .expect("default_prompt mutex poisoned");
         prompts
-            .and_then(|p| p.get(default).map(|a| a.instruction.clone()))
+            .get(default)
+            .map(|a| a.instruction.clone())
             .unwrap_or_default()
     }
 }
