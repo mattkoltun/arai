@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 use log::{debug, error, info};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -68,8 +68,6 @@ impl Recorder {
             let sample_rate = config.sample_rate().0;
             let channels = config.channels();
             let stream_config: cpal::StreamConfig = config.clone().into();
-            let last_chunk: Arc<Mutex<Option<Vec<i16>>>> = Arc::new(Mutex::new(None));
-            let last_chunk_cb = Arc::clone(&last_chunk);
             let audio_tx_final = audio_tx.clone();
 
             let app_event_tx_clone = app_event_tx.clone();
@@ -85,15 +83,10 @@ impl Recorder {
                 SampleFormat::F32 => device.build_input_stream(
                     &stream_config,
                     move |data: &[f32], _| {
-                        let audio_tx = audio_tx.clone();
                         let chunk: Vec<i16> = data
                             .iter()
                             .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
                             .collect();
-                        if let Ok(mut last) = last_chunk_cb.lock() {
-                            *last = Some(chunk.clone());
-                        }
-
                         let _ = audio_tx.send(AudioChunk {
                             sample_rate,
                             channels,
@@ -107,16 +100,10 @@ impl Recorder {
                 SampleFormat::I16 => device.build_input_stream(
                     &stream_config,
                     move |data: &[i16], _| {
-                        let audio_tx = audio_tx.clone();
-                        let chunk = data.to_vec();
-                        if let Ok(mut last) = last_chunk_cb.lock() {
-                            *last = Some(chunk.clone());
-                        }
-
                         let _ = audio_tx.send(AudioChunk {
                             sample_rate,
                             channels,
-                            samples: chunk,
+                            samples: data.to_vec(),
                             is_final: false,
                         });
                     },
@@ -126,7 +113,6 @@ impl Recorder {
                 SampleFormat::U16 => device.build_input_stream(
                     &stream_config,
                     move |data: &[u16], _| {
-                        let audio_tx = audio_tx.clone();
                         let chunk: Vec<i16> = data
                             .iter()
                             .map(|&s| {
@@ -134,10 +120,6 @@ impl Recorder {
                                 shifted.clamp(i16::MIN as i32, i16::MAX as i32) as i16
                             })
                             .collect();
-
-                        if let Ok(mut last) = last_chunk_cb.lock() {
-                            *last = Some(chunk.clone());
-                        }
                         let _ = audio_tx.send(AudioChunk {
                             sample_rate,
                             channels,
@@ -180,17 +162,13 @@ impl Recorder {
             debug!("Recorder stopping stream");
             drop(stream);
 
-            debug!("Recorder sending final chunk");
-            if let Ok(mut last) = last_chunk.lock()
-                && let Some(samples) = last.take()
-            {
-                let _ = audio_tx_final.send(AudioChunk {
-                    sample_rate,
-                    channels,
-                    samples,
-                    is_final: true,
-                });
-            }
+            debug!("Recorder sending final marker");
+            let _ = audio_tx_final.send(AudioChunk {
+                sample_rate,
+                channels,
+                samples: Vec::new(),
+                is_final: true,
+            });
 
             let _ = app_event_tx.send(AppEvent {
                 source: AppEventSource::Recorder,
