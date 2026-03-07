@@ -1,0 +1,42 @@
+ISSUE: Race between cpal audio callback and recorder shutdown for last_chunk
+
+When the recorder's stop flag is set, the recorder thread exits its
+sleep loop and locks last_chunk to send the final audio. However, the
+cpal stream callback runs on a separate OS audio thread and may still
+be executing — it also locks last_chunk to store new samples.
+
+The cpal stream is not paused or dropped before the recorder thread
+reads last_chunk. This means:
+  1. The callback can overwrite last_chunk after the recorder reads it,
+     losing the true final samples.
+  2. The callback can hold the lock when the recorder tries to acquire
+     it, causing the if-let to skip (since it uses if let Ok(..)).
+
+The stream is only dropped implicitly when the spawned closure returns,
+which is after the final chunk send — so the callback can fire during
+the critical section.
+
+FILES: src/recorder.rs (lines 176-196)
+
+FIX: Drop the cpal stream before reading last_chunk. This ensures the
+audio callback is no longer running when the recorder reads the final
+samples.
+
+  // After exiting the stop-flag loop:
+  debug!("Recorder stopping stream");
+  drop(stream);  // Stops callbacks, waits for in-flight callback to finish
+
+  debug!("Recorder sending final chunk");
+  if let Ok(mut last) = last_chunk.lock()
+      && let Some(samples) = last.take()
+  {
+      let _ = audio_tx_final.send(AudioChunk {
+          sample_rate,
+          channels,
+          samples,
+          is_final: true,
+      });
+  }
+
+cpal guarantees that after Stream::drop() returns, no more callbacks
+will fire, making the subsequent lock acquisition safe.
