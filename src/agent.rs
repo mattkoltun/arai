@@ -4,6 +4,8 @@ use log::{debug, info, warn};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -20,7 +22,8 @@ pub struct AgentRequest {
 
 /// Submits text to OpenAI for processing via a persistent worker thread.
 pub struct Agent {
-    tx: AgentSender,
+    tx: Option<AgentSender>,
+    stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -29,12 +32,22 @@ impl Agent {
     /// requests sequentially. The worker exits when the `Agent` is dropped.
     pub fn new(app_event_tx: AppEventSender, api_key: String) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<AgentRequest>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
 
         let handle = thread::spawn(move || {
             info!("Agent worker thread started");
             while let Ok(request) = rx.recv() {
+                if stop_flag.load(Ordering::SeqCst) {
+                    break;
+                }
                 debug!("Agent worker processing request");
-                match call_openai_with_retry(&api_key, request.instruction, request.text) {
+                match call_openai_with_retry(
+                    &api_key,
+                    request.instruction,
+                    request.text,
+                    &stop_flag,
+                ) {
                     Ok(response) => {
                         let _ = app_event_tx.send(AppEvent {
                             source: AppEventSource::Agent,
@@ -53,19 +66,25 @@ impl Agent {
         });
 
         Self {
-            tx,
+            tx: Some(tx),
+            stop,
             handle: Some(handle),
         }
     }
 
     /// Submits a text processing request to the worker thread.
     pub fn submit(&self, instruction: String, text: String) {
-        let _ = self.tx.send(AgentRequest { instruction, text });
+        if let Some(ref tx) = self.tx {
+            let _ = tx.send(AgentRequest { instruction, text });
+        }
     }
 }
 
 impl Drop for Agent {
     fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Drop sender to unblock recv()
+        self.tx.take();
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -76,6 +95,7 @@ fn call_openai_with_retry(
     api_key: &str,
     instructions: String,
     text: String,
+    stop: &AtomicBool,
 ) -> Result<String, reqwest::Error> {
     debug!("Agent submitting text to OpenAI");
     let client = Client::builder()
@@ -96,7 +116,10 @@ fn call_openai_with_retry(
         match call_openai_once(&client, api_key, &request) {
             Ok(response) => return Ok(response),
             Err(err) => {
-                if !is_retryable_error(&err) || attempt >= MAX_RETRIES {
+                if !is_retryable_error(&err)
+                    || attempt >= MAX_RETRIES
+                    || stop.load(Ordering::SeqCst)
+                {
                     return Err(err);
                 }
 
