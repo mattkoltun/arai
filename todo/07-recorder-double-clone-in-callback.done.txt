@@ -1,0 +1,43 @@
+ISSUE: Audio callback clones sample buffer twice and locks a mutex
+
+Every audio callback invocation (hundreds of times per second):
+  1. Allocates a Vec<i16> for the converted chunk.
+  2. Clones it to store in last_chunk (mutex-protected).
+  3. Sends the original via the channel (another allocation for the
+     channel's internal queue node).
+
+The mutex lock inside the audio callback is particularly problematic.
+cpal audio callbacks run on a real-time OS thread — blocking on a
+mutex can cause audio glitches (underruns/overruns) if the lock is
+contended.
+
+FILES: src/recorder.rs (all three format callbacks: F32, I16, U16)
+
+FIX: Remove last_chunk storage from the callback entirely. Instead,
+track the final chunk on the receiver side. The transcriber already
+receives every chunk — the controller can note the last chunk received
+before the is_final marker.
+
+Alternatively, if last_chunk must stay, use a lock-free approach:
+
+  let last_chunk: Arc<Mutex<Option<Vec<i16>>>> = ...;
+
+Replace with:
+
+  let last_chunk: Arc<std::sync::atomic::AtomicPtr<Vec<i16>>> = ...;
+
+Or simpler: just send the chunk once and let the receiver keep a
+reference. The callback becomes:
+
+  move |data: &[f32], _| {
+      let chunk: Vec<i16> = data
+          .iter()
+          .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+          .collect();
+      let _ = audio_tx.send(AudioChunk {
+          sample_rate, channels, samples: chunk, is_final: false,
+      });
+  };
+
+Then in the stop path, send a separate final marker chunk with empty
+samples and is_final: true, without needing last_chunk at all.
