@@ -2,6 +2,7 @@ use crate::channels::{AppEventSender, AudioReceiver};
 use crate::config::TranscriberConfig;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk};
 use log::{debug, error, info};
+use std::fmt;
 use std::thread::{self, JoinHandle};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
@@ -10,25 +11,59 @@ use whisper_rs::{
 /// Target sample rate required by the Whisper model.
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 
+#[derive(Debug)]
+pub enum TranscriberError {
+    ModelNotFound(String),
+}
+
+impl fmt::Display for TranscriberError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ModelNotFound(path) => write!(f, "Whisper model not found: {path}"),
+        }
+    }
+}
+
 /// Manages a background thread that receives audio chunks, resamples them,
 /// and runs Whisper transcription in a sliding-window loop.
 pub struct Transcriber {
+    audio_rx: Option<AudioReceiver>,
+    app_event_tx: AppEventSender,
+    config: TranscriberConfig,
     handle: Option<JoinHandle<()>>,
 }
 
 impl Transcriber {
-    /// Spawns the transcriber worker thread. Audio chunks received on `audio_rx`
-    /// are accumulated into a buffer and transcribed when the buffer reaches the
-    /// configured window size or when a final chunk arrives.
+    /// Creates a new Transcriber without starting the worker thread. Call
+    /// [`start()`](Self::start) to validate the model and begin processing.
     pub fn new(
         audio_rx: AudioReceiver,
         app_event_tx: AppEventSender,
         config: TranscriberConfig,
     ) -> Self {
-        let handle = thread::spawn(move || worker(audio_rx, app_event_tx, config));
         Self {
-            handle: Some(handle),
+            audio_rx: Some(audio_rx),
+            app_event_tx,
+            config,
+            handle: None,
         }
+    }
+
+    /// Validates the Whisper model path and spawns the worker thread. Returns
+    /// an error if the model file does not exist.
+    pub fn start(&mut self) -> Result<(), TranscriberError> {
+        if !std::path::Path::new(&self.config.model_path).exists() {
+            return Err(TranscriberError::ModelNotFound(
+                self.config.model_path.clone(),
+            ));
+        }
+        let audio_rx = self.audio_rx.take().expect("start() called only once");
+        let app_event_tx = self.app_event_tx.clone();
+        let config = self.config.clone();
+        self.handle = Some(thread::spawn(move || {
+            worker(audio_rx, app_event_tx, config)
+        }));
+        Ok(())
     }
 }
 
