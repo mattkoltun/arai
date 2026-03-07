@@ -7,7 +7,6 @@ use crate::transcriber::Transcriber;
 use log::{debug, error, info};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
 use std::time::Duration;
 
 /// Lightweight handle that allows external code (e.g. main) to signal shutdown
@@ -94,81 +93,91 @@ impl Controller {
         accumulated.push_str(text);
     }
 
+    /// Sends a `ConfigSnapshot` to the UI so it has the current config state.
+    fn send_config_snapshot(&self) {
+        let snapshot = self.app_state.snapshot();
+        let _ = self.ui_update_tx.send(UiUpdate::ConfigSnapshot {
+            agent_prompts: snapshot.agent_prompts,
+            default_prompt: snapshot.default_prompt,
+            transcriber: snapshot.transcriber,
+        });
+    }
+
     /// Runs the Controller event loop, consuming `self`. The loop exits when
     /// the associated [`ShutdownHandle`] signals shutdown.
     pub fn run(mut self) {
         let mut accumulated_transcription = String::new();
 
+        // Send initial config snapshot so the UI has config before any changes.
+        self.send_config_snapshot();
+
         while !self.shutting_down.load(Ordering::SeqCst) {
-            let events: Vec<_> = self.app_event_rx.try_iter().collect();
-            for event in events {
-                match (event.source, event.kind) {
-                    (AppEventSource::Recorder, AppEventKind::Stopped) => {
-                        info!("Recorder stopped, joining handle");
-                        self.recorder.join_handle();
-                    }
-                    (AppEventSource::Recorder, AppEventKind::Error(message)) => {
-                        error!("Recorder event: {message}");
-                        // TODO: implement recorder error handling (e.g., restart recorder or update UI)
-                    }
-                    (AppEventSource::Transcriber, AppEventKind::Error(message)) => {
-                        error!("Transcriber event: {message}");
-                    }
-                    (AppEventSource::Transcriber, AppEventKind::Transcription(text)) => {
-                        debug!("Controller received transcript");
-                        Self::append_transcription(&mut accumulated_transcription, &text);
-                        let _ = self.ui_update_tx.send(UiUpdate::TranscriptionUpdated(
-                            accumulated_transcription.clone(),
-                        ));
-                    }
-                    (AppEventSource::Agent, AppEventKind::Error(message)) => {
-                        error!("Agent event: {message}");
-                        let _ = self.ui_update_tx.send(UiUpdate::ProcessingFailed(message));
-                    }
-                    (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
-                        self.process_text(text);
-                    }
-                    (AppEventSource::Ui, AppEventKind::UiStartListening(text)) => {
-                        accumulated_transcription = text;
-                        self.start_listening();
-                    }
-                    (AppEventSource::Ui, AppEventKind::UiStopListening) => {
-                        self.stop_listening();
-                    }
-                    (AppEventSource::Ui, AppEventKind::UiSubmitText(text)) => {
-                        self.submit_text(text);
-                    }
-                    (AppEventSource::Ui, AppEventKind::UiShutdown) => {
-                        self.shutting_down.store(true, Ordering::SeqCst);
-                    }
-                    (
-                        AppEventSource::Ui,
-                        AppEventKind::UiUpdatePrompts {
-                            prompts,
-                            default_prompt,
-                        },
-                    ) => {
-                        info!("Controller updating agent prompts");
-                        self.app_state.update_prompts(prompts, default_prompt);
-                    }
-                    (AppEventSource::Ui, AppEventKind::UiUpdateTranscriber(transcriber_config)) => {
-                        info!("Controller updating transcriber config");
-                        self.app_state.update_transcriber(transcriber_config);
-                    }
-                    (source, kind) => {
-                        let _ = (source, kind);
-                        // TODO: handle other app events
-                    }
+            let event = match self.app_event_rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(event) => event,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            match (event.source, event.kind) {
+                (AppEventSource::Recorder, AppEventKind::Stopped) => {
+                    info!("Recorder stopped, joining handle");
+                    self.recorder.join_handle();
+                }
+                (AppEventSource::Recorder, AppEventKind::Error(message)) => {
+                    error!("Recorder event: {message}");
+                    // TODO: implement recorder error handling (e.g., restart recorder or update UI)
+                }
+                (AppEventSource::Transcriber, AppEventKind::Error(message)) => {
+                    error!("Transcriber event: {message}");
+                }
+                (AppEventSource::Transcriber, AppEventKind::Transcription(text)) => {
+                    debug!("Controller received transcript");
+                    Self::append_transcription(&mut accumulated_transcription, &text);
+                    let _ = self.ui_update_tx.send(UiUpdate::TranscriptionUpdated(
+                        accumulated_transcription.clone(),
+                    ));
+                }
+                (AppEventSource::Agent, AppEventKind::Error(message)) => {
+                    error!("Agent event: {message}");
+                    let _ = self.ui_update_tx.send(UiUpdate::ProcessingFailed(message));
+                }
+                (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
+                    self.process_text(text);
+                }
+                (AppEventSource::Ui, AppEventKind::UiStartListening(text)) => {
+                    accumulated_transcription = text;
+                    self.start_listening();
+                }
+                (AppEventSource::Ui, AppEventKind::UiStopListening) => {
+                    self.stop_listening();
+                }
+                (AppEventSource::Ui, AppEventKind::UiSubmitText(text)) => {
+                    self.submit_text(text);
+                }
+                (AppEventSource::Ui, AppEventKind::UiShutdown) => {
+                    self.shutting_down.store(true, Ordering::SeqCst);
+                }
+                (
+                    AppEventSource::Ui,
+                    AppEventKind::UiUpdatePrompts {
+                        prompts,
+                        default_prompt,
+                    },
+                ) => {
+                    info!("Controller updating agent prompts");
+                    self.app_state.update_prompts(prompts, default_prompt);
+                    self.send_config_snapshot();
+                }
+                (AppEventSource::Ui, AppEventKind::UiUpdateTranscriber(transcriber_config)) => {
+                    info!("Controller updating transcriber config");
+                    self.app_state.update_transcriber(transcriber_config);
+                    self.send_config_snapshot();
+                }
+                (source, kind) => {
+                    let _ = (source, kind);
+                    // TODO: handle other app events
                 }
             }
-
-            let snapshot = self.app_state.snapshot();
-            let _ = self.ui_update_tx.send(UiUpdate::ConfigSnapshot {
-                agent_prompts: snapshot.agent_prompts,
-                default_prompt: snapshot.default_prompt,
-                transcriber: snapshot.transcriber,
-            });
-            thread::sleep(Duration::from_millis(10));
         }
 
         info!("Controller shutting down");

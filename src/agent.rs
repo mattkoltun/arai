@@ -1,10 +1,10 @@
-use crate::channels::AppEventSender;
+use crate::channels::{AgentSender, AppEventSender};
 use crate::messages::{AppEvent, AppEventKind, AppEventSource};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const OPENAI_MODEL: &str = "gpt-4o-mini";
@@ -12,39 +12,63 @@ const REQUEST_TIMEOUT_SECS: u64 = 60;
 const MAX_RETRY_BACKOFF_SECS: u64 = 30;
 const MAX_RETRIES: u32 = 5;
 
-#[derive(Clone)]
+/// A request to process text through the OpenAI agent.
+pub struct AgentRequest {
+    pub instruction: String,
+    pub text: String,
+}
+
+/// Submits text to OpenAI for processing via a persistent worker thread.
 pub struct Agent {
-    app_event_tx: AppEventSender,
-    api_key: String,
+    tx: AgentSender,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl Agent {
+    /// Creates a new Agent with a persistent worker thread that processes
+    /// requests sequentially. The worker exits when the `Agent` is dropped.
     pub fn new(app_event_tx: AppEventSender, api_key: String) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<AgentRequest>();
+
+        let handle = thread::spawn(move || {
+            info!("Agent worker thread started");
+            while let Ok(request) = rx.recv() {
+                debug!("Agent worker processing request");
+                match call_openai_with_retry(&api_key, request.instruction, request.text) {
+                    Ok(response) => {
+                        let _ = app_event_tx.send(AppEvent {
+                            source: AppEventSource::Agent,
+                            kind: AppEventKind::AgentResponse(response),
+                        });
+                    }
+                    Err(err) => {
+                        let _ = app_event_tx.send(AppEvent {
+                            source: AppEventSource::Agent,
+                            kind: AppEventKind::Error(format!("Agent request failed: {err}")),
+                        });
+                    }
+                }
+            }
+            info!("Agent worker thread exiting");
+        });
+
         Self {
-            app_event_tx,
-            api_key,
+            tx,
+            handle: Some(handle),
         }
     }
 
-    pub fn submit(&self, instructions: String, text: String) {
-        let app_event_tx = self.app_event_tx.clone();
-        let api_key = self.api_key.clone();
-        thread::spawn(
-            move || match call_openai_with_retry(&api_key, instructions, text) {
-                Ok(response) => {
-                    let _ = app_event_tx.send(AppEvent {
-                        source: AppEventSource::Agent,
-                        kind: AppEventKind::AgentResponse(response),
-                    });
-                }
-                Err(err) => {
-                    let _ = app_event_tx.send(AppEvent {
-                        source: AppEventSource::Agent,
-                        kind: AppEventKind::Error(format!("Agent request failed: {err}")),
-                    });
-                }
-            },
-        );
+    /// Submits a text processing request to the worker thread.
+    pub fn submit(&self, instruction: String, text: String) {
+        let _ = self.tx.send(AgentRequest { instruction, text });
+    }
+}
+
+impl Drop for Agent {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
