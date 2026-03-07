@@ -11,6 +11,7 @@ use iced::{
     Background, Border, Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme,
     keyboard, time, window,
 };
+use futures::SinkExt;
 use log::debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1065,7 +1066,12 @@ fn subscription(state: &UiRuntime) -> Subscription<Message> {
                 if let Some(rx) = rx {
                     std::thread::spawn(move || {
                         while let Ok(update) = rx.recv() {
-                            if sender.try_send(Message::UiUpdateReceived(update)).is_err() {
+                            if futures::executor::block_on(
+                                sender.send(Message::UiUpdateReceived(update)),
+                            )
+                            .is_err()
+                            {
+                                log::warn!("UI channel closed, bridge exiting");
                                 break;
                             }
                         }
