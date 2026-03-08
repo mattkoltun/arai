@@ -181,7 +181,10 @@ impl Controller {
         }
 
         info!("Controller shutting down");
-        self.recorder.stop();
-        drop(self.transcriber);
+        let mut recorder = self.recorder;
+        let transcriber = self.transcriber;
+        recorder.stop();
+        drop(recorder);
+        drop(transcriber);
     }
 }
