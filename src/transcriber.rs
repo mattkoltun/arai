@@ -1,8 +1,10 @@
 use crate::channels::{AppEventSender, AudioReceiver};
 use crate::config::TranscriberConfig;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk};
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
@@ -31,6 +33,7 @@ pub struct Transcriber {
     app_event_tx: AppEventSender,
     config: TranscriberConfig,
     handle: Option<JoinHandle<()>>,
+    stop_flag: Arc<AtomicBool>,
 }
 
 impl Transcriber {
@@ -46,6 +49,7 @@ impl Transcriber {
             app_event_tx,
             config,
             handle: None,
+            stop_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -60,10 +64,16 @@ impl Transcriber {
         let audio_rx = self.audio_rx.take().expect("start() called only once");
         let app_event_tx = self.app_event_tx.clone();
         let config = self.config.clone();
+        let stop_flag = Arc::clone(&self.stop_flag);
         self.handle = Some(thread::spawn(move || {
-            worker(audio_rx, app_event_tx, config)
+            worker(audio_rx, app_event_tx, config, stop_flag)
         }));
         Ok(())
+    }
+
+    /// Signals the worker to stop processing and exit promptly.
+    pub fn stop(&self) {
+        self.stop_flag.store(true, Ordering::SeqCst);
     }
 }
 
@@ -80,7 +90,12 @@ impl Drop for Transcriber {
 /// audio chunks, accumulates them into a buffer, and runs transcription when
 /// the buffer reaches the configured window size or a final chunk is received.
 /// Transcription results are sent to the controller via `app_event_tx`.
-fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender, config: TranscriberConfig) {
+fn worker(
+    audio_rx: AudioReceiver,
+    app_event_tx: AppEventSender,
+    config: TranscriberConfig,
+    stop_flag: Arc<AtomicBool>,
+) {
     let ctx = match WhisperContext::new_with_params(
         &config.model_path,
         WhisperContextParameters::default(),
@@ -99,7 +114,11 @@ fn worker(audio_rx: AudioReceiver, app_event_tx: AppEventSender, config: Transcr
     info!("Transcriber ready");
     let mut buffer = Vec::new();
     while let Ok(chunk) = audio_rx.recv() {
-        debug!("Transcriber received audio chunk");
+        if stop_flag.load(Ordering::SeqCst) {
+            debug!("Transcriber stop flag set, exiting");
+            break;
+        }
+        trace!("Transcriber received audio chunk");
         buffer.extend(resample_to_mono_16k(&chunk));
         let window_samples = (TARGET_SAMPLE_RATE as f32 * config.window_seconds) as usize;
         let overlap_samples = (TARGET_SAMPLE_RATE as f32 * config.overlap_seconds) as usize;
