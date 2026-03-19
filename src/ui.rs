@@ -812,12 +812,13 @@ fn view_main<'a>(
             .padding([10, 14])
             .width(Fill);
 
-    let mut editor_area = text_editor(&state.editor)
+    let mut editor_widget = text_editor(&state.editor)
         .style(borderless_editor)
+        .wrapping(text::Wrapping::Word)
         .padding(16)
         .height(Fill);
     if !listening && !processing {
-        editor_area = editor_area.on_action(Message::EditorAction);
+        editor_widget = editor_widget.on_action(Message::EditorAction);
     }
 
     let char_count_text = text(format!("{} chars", char_count)).size(12).color(MUTED);
@@ -877,7 +878,7 @@ fn view_main<'a>(
     .spacing(6);
 
     let body = column![
-        container(editor_area)
+        container(editor_widget)
             .style(surface_container)
             .padding(4)
             .height(FillPortion(8)),
