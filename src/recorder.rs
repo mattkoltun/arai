@@ -3,8 +3,8 @@ use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
 use log::{debug, error, info};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -18,15 +18,21 @@ pub struct Recorder {
     app_event_tx: AppEventSender,
     stop_flag: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    input_device: Option<String>,
 }
 
 impl Recorder {
-    pub fn new(audio_tx: AudioSender, app_event_tx: AppEventSender) -> Self {
+    pub fn new(
+        audio_tx: AudioSender,
+        app_event_tx: AppEventSender,
+        input_device: Option<String>,
+    ) -> Self {
         Self {
             audio_tx,
             app_event_tx,
             stop_flag: Arc::new(AtomicBool::new(false)),
             handle: None,
+            input_device,
         }
     }
 
@@ -40,16 +46,17 @@ impl Recorder {
         stop_flag.store(false, Ordering::SeqCst);
         let audio_tx = self.audio_tx.clone();
         let app_event_tx = self.app_event_tx.clone();
+        let input_device = self.input_device.clone();
 
         let handle = thread::spawn(move || {
             let host = cpal::default_host();
-            let device = match host.default_input_device() {
-                Some(d) => d,
-                None => {
-                    error!("No input device available");
+            let device = match Self::find_device(&host, input_device.as_deref()) {
+                Ok(d) => d,
+                Err(err) => {
+                    error!("{err}");
                     let _ = app_event_tx.send(AppEvent {
                         source: AppEventSource::Recorder,
-                        kind: AppEventKind::Error("No input device".into()),
+                        kind: AppEventKind::Error(err),
                     });
                     return;
                 }
@@ -179,6 +186,45 @@ impl Recorder {
 
         self.handle = Some(handle);
         Ok(())
+    }
+
+    /// Returns the names of all available input devices.
+    pub fn list_input_devices() -> Vec<String> {
+        let host = cpal::default_host();
+        let Ok(devices) = host.input_devices() else {
+            return Vec::new();
+        };
+        devices.filter_map(|d| d.name().ok()).collect()
+    }
+
+    /// Updates the input device used for future recordings.
+    pub fn set_input_device(&mut self, device: Option<String>) {
+        self.input_device = device;
+    }
+
+    /// Finds the input device matching the configured name, or falls back to
+    /// the system default. Uses exact matching against device names from the
+    /// system device list.
+    fn find_device(host: &cpal::Host, name: Option<&str>) -> Result<cpal::Device, String> {
+        if let Some(wanted) = name {
+            let devices = host
+                .input_devices()
+                .map_err(|e| format!("Failed to list input devices: {e}"))?;
+            for device in devices {
+                if let Ok(dev_name) = device.name()
+                    && dev_name == wanted
+                {
+                    info!("Using input device: {dev_name}");
+                    return Ok(device);
+                }
+            }
+            return Err(format!(
+                "Input device '{wanted}' not found. \
+                 Remove input_device from config to use the system default."
+            ));
+        }
+        host.default_input_device()
+            .ok_or_else(|| "No input device available".to_string())
     }
 
     /// Signals the recorder thread to stop without blocking. The thread will

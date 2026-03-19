@@ -4,8 +4,8 @@ use log::{debug, info, warn};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 

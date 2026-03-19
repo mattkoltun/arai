@@ -100,6 +100,8 @@ impl Controller {
             agent_prompts: snapshot.agent_prompts,
             default_prompt: snapshot.default_prompt,
             transcriber: snapshot.transcriber,
+            input_devices: Recorder::list_input_devices(),
+            selected_input_device: snapshot.input_device,
         });
     }
 
@@ -171,6 +173,12 @@ impl Controller {
                 (AppEventSource::Ui, AppEventKind::UiUpdateTranscriber(transcriber_config)) => {
                     info!("Controller updating transcriber config");
                     self.app_state.update_transcriber(transcriber_config);
+                    self.send_config_snapshot();
+                }
+                (AppEventSource::Ui, AppEventKind::UiUpdateInputDevice(device)) => {
+                    info!("Controller updating input device: {:?}", device);
+                    self.app_state.update_input_device(device.clone());
+                    self.recorder.set_input_device(device);
                     self.send_config_snapshot();
                 }
                 (source, kind) => {

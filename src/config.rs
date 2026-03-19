@@ -63,6 +63,10 @@ pub struct Config {
     pub default_prompt: usize,
     pub transcriber: TranscriberConfig,
     pub global_hotkey: String,
+    /// Optional input device name. When set, the recorder will use this device
+    /// instead of the system default. Use this to avoid Bluetooth headphones
+    /// switching from A2DP (stereo) to HFP (mono) when the mic activates.
+    pub input_device: Option<String>,
 }
 
 impl Config {
@@ -89,6 +93,7 @@ impl Config {
             default_prompt: Some(self.default_prompt),
             transcriber: Some(self.transcriber.clone()),
             global_hotkey: Some(self.global_hotkey.clone()),
+            input_device: self.input_device.clone(),
         };
         let yaml = serde_yaml::to_string(&file_config)?;
         std::fs::write(&path, yaml)?;
@@ -135,6 +140,7 @@ struct PartialConfig {
     default_prompt: Option<usize>,
     transcriber: Option<TranscriberConfig>,
     global_hotkey: Option<String>,
+    input_device: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -146,6 +152,8 @@ struct FileConfig {
     default_prompt: Option<usize>,
     transcriber: Option<TranscriberConfig>,
     global_hotkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_device: Option<String>,
 }
 
 impl PartialConfig {
@@ -161,6 +169,7 @@ impl PartialConfig {
             default_prompt: Some(0),
             transcriber: Some(TranscriberConfig::default()),
             global_hotkey: Some(DEFAULT_GLOBAL_HOTKEY.to_string()),
+            input_device: None,
         }
     }
 
@@ -185,6 +194,7 @@ impl PartialConfig {
             default_prompt: None,
             transcriber: None,
             global_hotkey: None,
+            input_device: None,
         })
     }
 
@@ -197,6 +207,7 @@ impl PartialConfig {
             default_prompt: other.default_prompt.or(self.default_prompt),
             transcriber: other.transcriber.or(self.transcriber),
             global_hotkey: other.global_hotkey.or(self.global_hotkey),
+            input_device: other.input_device.or(self.input_device),
         }
     }
 }
@@ -246,6 +257,8 @@ fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
         .global_hotkey
         .unwrap_or_else(|| DEFAULT_GLOBAL_HOTKEY.to_string());
 
+    let input_device = partial.input_device.filter(|s| !s.trim().is_empty());
+
     Ok(Config {
         log_level,
         log_path,
@@ -254,6 +267,7 @@ fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
         default_prompt,
         transcriber,
         global_hotkey,
+        input_device,
     })
 }
 
@@ -273,6 +287,7 @@ mod tests {
             default_prompt: Some(0),
             transcriber: Some(TranscriberConfig::default()),
             global_hotkey: Some("CmdOrCtrl+Shift+A".to_string()),
+            input_device: None,
         }
     }
 

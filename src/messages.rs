@@ -18,11 +18,13 @@ pub enum UiUpdate {
     AgentResponseReceived(String),
     /// Agent processing failed — contains the error message.
     ProcessingFailed(String),
-    /// Snapshot of config state (prompts, transcriber settings).
+    /// Snapshot of config state (prompts, transcriber settings, audio devices).
     ConfigSnapshot {
         agent_prompts: Vec<AgentPrompt>,
         default_prompt: usize,
         transcriber: TranscriberConfig,
+        input_devices: Vec<String>,
+        selected_input_device: Option<String>,
     },
 }
 
@@ -49,6 +51,7 @@ pub enum AppEventKind {
         default_prompt: usize,
     },
     UiUpdateTranscriber(TranscriberConfig),
+    UiUpdateInputDevice(Option<String>),
 }
 
 // #[derive(Clone, Debug)]

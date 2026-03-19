@@ -6,6 +6,7 @@ pub struct AppStateSnapshot {
     pub agent_prompts: Vec<AgentPrompt>,
     pub default_prompt: usize,
     pub transcriber: TranscriberConfig,
+    pub input_device: Option<String>,
 }
 
 /// Internal state protected by a single mutex to guarantee consistent reads
@@ -49,6 +50,7 @@ impl AppState {
             agent_prompts: inner.agent_prompts.clone(),
             default_prompt: inner.default_prompt,
             transcriber: inner.transcriber.clone(),
+            input_device: inner.config.input_device.clone(),
         }
     }
 
@@ -68,6 +70,14 @@ impl AppState {
         let mut inner = self.inner.lock().expect("app_state mutex poisoned");
         inner.transcriber = transcriber_config.clone();
         inner.config.transcriber = transcriber_config;
+        if let Err(e) = inner.config.save() {
+            log::error!("Failed to save config: {e}");
+        }
+    }
+
+    pub fn update_input_device(&self, device: Option<String>) {
+        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
+        inner.config.input_device = device;
         if let Err(e) = inner.config.save() {
             log::error!("Failed to save config: {e}");
         }
@@ -99,6 +109,7 @@ mod tests {
             default_prompt: 0,
             transcriber: TranscriberConfig::default(),
             global_hotkey: "CmdOrCtrl+Shift+A".to_string(),
+            input_device: None,
         }
     }
 

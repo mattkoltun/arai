@@ -2,16 +2,16 @@ use crate::channels::{AppEventSender, UiUpdateReceiver};
 use crate::config::{AgentPrompt, TranscriberConfig};
 use crate::global_hotkey::HotkeyHandle;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, UiUpdate};
+use futures::SinkExt;
 use iced::font::Family;
 use iced::theme::Palette;
 use iced::widget::{
-    Column, button, column, container, row, scrollable, text, text_editor, text_input,
+    Column, button, column, container, pick_list, row, scrollable, text, text_editor, text_input,
 };
 use iced::{
     Background, Border, Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme,
-    keyboard, time, window,
+    keyboard, overlay, time, window,
 };
-use futures::SinkExt;
 use log::debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -225,6 +225,43 @@ fn borderless_input(_theme: &Theme, status: text_input::Status) -> text_input::S
     }
 }
 
+fn styled_pick_list(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let border_color = match status {
+        pick_list::Status::Opened => PINK,
+        pick_list::Status::Hovered => Color::from_rgba(0.976, 0.361, 0.576, 0.4),
+        _ => Color::TRANSPARENT,
+    };
+    pick_list::Style {
+        background: Background::Color(SURFACE),
+        text_color: TEXT_COLOR,
+        placeholder_color: MUTED,
+        handle_color: MUTED,
+        border: Border {
+            color: border_color,
+            width: if matches!(status, pick_list::Status::Opened) {
+                1.0
+            } else {
+                0.0
+            },
+            radius: 8.0.into(),
+        },
+    }
+}
+
+fn pick_list_menu(_theme: &Theme) -> overlay::menu::Style {
+    overlay::menu::Style {
+        background: Background::Color(SURFACE),
+        text_color: TEXT_COLOR,
+        selected_text_color: Color::WHITE,
+        selected_background: Background::Color(PINK),
+        border: Border {
+            color: MUTED,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+    }
+}
+
 fn borderless_editor(_theme: &Theme, status: text_editor::Status) -> text_editor::Style {
     let border_color = match status {
         text_editor::Status::Focused => PINK,
@@ -268,11 +305,13 @@ enum AppMode {
 
 const MAX_PROMPTS: usize = 10;
 
-struct TranscriberFields {
+struct SetupFields {
     model_path: String,
     window_secs: String,
     overlap_secs: String,
     silence_thresh: String,
+    input_devices: Vec<String>,
+    selected_input_device: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -331,10 +370,14 @@ impl Ui {
                         config_window_seconds: String::new(),
                         config_overlap_seconds: String::new(),
                         config_silence_threshold: String::new(),
+                        config_input_devices: Vec::new(),
+                        config_selected_input_device: None,
                         config_tab: ConfigTab::default(),
                         snapshot_prompts: Vec::new(),
                         snapshot_default: 0,
                         snapshot_transcriber: None,
+                        snapshot_input_devices: Vec::new(),
+                        snapshot_selected_input_device: None,
                     },
                     Task::none(),
                 )
@@ -363,10 +406,14 @@ struct UiRuntime {
     config_window_seconds: String,
     config_overlap_seconds: String,
     config_silence_threshold: String,
+    config_input_devices: Vec<String>,
+    config_selected_input_device: Option<String>,
     config_tab: ConfigTab,
     snapshot_prompts: Vec<AgentPrompt>,
     snapshot_default: usize,
     snapshot_transcriber: Option<TranscriberConfig>,
+    snapshot_input_devices: Vec<String>,
+    snapshot_selected_input_device: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -389,6 +436,7 @@ enum Message {
     WindowSecondsChanged(String),
     OverlapSecondsChanged(String),
     SilenceThresholdChanged(String),
+    InputDeviceSelected(String),
     SwitchConfigTab(ConfigTab),
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
@@ -487,10 +535,14 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     agent_prompts,
                     default_prompt,
                     transcriber,
+                    input_devices,
+                    selected_input_device,
                 } => {
                     state.snapshot_prompts = agent_prompts;
                     state.snapshot_default = default_prompt;
                     state.snapshot_transcriber = Some(transcriber);
+                    state.snapshot_input_devices = input_devices;
+                    state.snapshot_selected_input_device = selected_input_device;
                 }
             }
             Task::none()
@@ -539,6 +591,8 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_window_seconds = tc.window_seconds.to_string();
             state.config_overlap_seconds = tc.overlap_seconds.to_string();
             state.config_silence_threshold = tc.silence_threshold.to_string();
+            state.config_input_devices = state.snapshot_input_devices.clone();
+            state.config_selected_input_device = state.snapshot_selected_input_device.clone();
             state.config_tab = ConfigTab::Setup;
             state.config_open = true;
 
@@ -603,6 +657,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 overlap_seconds: overlap,
                 silence_threshold: silence,
             }));
+
+            state.send_event(AppEventKind::UiUpdateInputDevice(
+                state.config_selected_input_device.clone(),
+            ));
 
             state.config_open = false;
             Task::none()
@@ -671,6 +729,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_silence_threshold = value;
             Task::none()
         }
+        Message::InputDeviceSelected(value) => {
+            state.config_selected_input_device = Some(value);
+            Task::none()
+        }
         Message::Shutdown => {
             state.send_event(AppEventKind::UiShutdown);
             iced::exit()
@@ -703,17 +765,19 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
 
 fn view(state: &UiRuntime) -> Element<'_, Message> {
     if state.config_open {
-        let transcriber_fields = TranscriberFields {
+        let setup_fields = SetupFields {
             model_path: state.config_model_path.clone(),
             window_secs: state.config_window_seconds.clone(),
             overlap_secs: state.config_overlap_seconds.clone(),
             silence_thresh: state.config_silence_threshold.clone(),
+            input_devices: state.config_input_devices.clone(),
+            selected_input_device: state.config_selected_input_device.clone(),
         };
         return view_config(
             state,
             state.config_prompts.clone(),
             state.config_default,
-            transcriber_fields,
+            setup_fields,
             state.config_tab.clone(),
         );
     }
@@ -835,7 +899,7 @@ fn view_config<'a>(
     state: &'a UiRuntime,
     prompts: Vec<PromptEntry>,
     config_default: usize,
-    tf: TranscriberFields,
+    sf: SetupFields,
     config_tab: ConfigTab,
 ) -> Element<'a, Message> {
     let setup_btn = button(text("Setup").size(13))
@@ -884,12 +948,7 @@ fn view_config<'a>(
     .width(Fill);
 
     let tab_content = match config_tab {
-        ConfigTab::Setup => view_setup_tab(
-            &tf.model_path,
-            &tf.window_secs,
-            &tf.overlap_secs,
-            &tf.silence_thresh,
-        ),
+        ConfigTab::Setup => view_setup_tab(&sf),
         ConfigTab::Instructions => view_instructions_tab(state, &prompts, config_default),
         ConfigTab::Advanced => view_advanced_tab(),
     };
@@ -917,33 +976,48 @@ fn view_config<'a>(
         .into()
 }
 
-fn view_setup_tab(
-    model_path: &str,
-    window_secs: &str,
-    overlap_secs: &str,
-    silence_thresh: &str,
-) -> Column<'static, Message> {
-    let model_path_input = text_input("Model path", model_path)
+fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
+    // ── Microphone card ─────────────────────────────────────────────
+    let device_picker = pick_list(
+        sf.input_devices.clone(),
+        sf.selected_input_device.clone(),
+        Message::InputDeviceSelected,
+    )
+    .placeholder("System Default")
+    .style(styled_pick_list)
+    .menu_style(pick_list_menu)
+    .padding(10)
+    .width(Fill);
+
+    let mic_card = column![
+        text("Microphone").size(15).color(TEXT_COLOR),
+        column![text("Input Device").size(11).color(MUTED), device_picker].spacing(4),
+    ]
+    .spacing(10)
+    .padding(14);
+
+    // ── Transcriber card ────────────────────────────────────────────
+    let model_path_input = text_input("Model path", &sf.model_path)
         .style(borderless_input)
         .padding(10)
         .on_input(Message::ModelPathChanged);
 
-    let window_secs_input = text_input("Window seconds", window_secs)
+    let window_secs_input = text_input("Window seconds", &sf.window_secs)
         .style(borderless_input)
         .padding(10)
         .on_input(Message::WindowSecondsChanged);
 
-    let overlap_secs_input = text_input("Overlap seconds", overlap_secs)
+    let overlap_secs_input = text_input("Overlap seconds", &sf.overlap_secs)
         .style(borderless_input)
         .padding(10)
         .on_input(Message::OverlapSecondsChanged);
 
-    let silence_thresh_input = text_input("Silence threshold", silence_thresh)
+    let silence_thresh_input = text_input("Silence threshold", &sf.silence_thresh)
         .style(borderless_input)
         .padding(10)
         .on_input(Message::SilenceThresholdChanged);
 
-    let card_content = column![
+    let transcriber_card = column![
         text("Transcriber").size(15).color(TEXT_COLOR),
         column![text("Model Path").size(11).color(MUTED), model_path_input].spacing(4),
         column![text("Window (s)").size(11).color(MUTED), window_secs_input].spacing(4),
@@ -961,9 +1035,14 @@ fn view_setup_tab(
     .spacing(10)
     .padding(14);
 
-    column![container(card_content).style(surface_container).width(Fill)]
-        .spacing(12)
-        .padding(14)
+    column![
+        container(mic_card).style(surface_container).width(Fill),
+        container(transcriber_card)
+            .style(surface_container)
+            .width(Fill),
+    ]
+    .spacing(12)
+    .padding(14)
 }
 
 fn view_instructions_tab<'a>(

@@ -35,7 +35,8 @@ fn main() {
     let (app_event_tx, app_event_rx) = mpsc::channel::<messages::AppEvent>();
     let (ui_update_tx, ui_update_rx) = mpsc::channel::<messages::UiUpdate>();
 
-    let recorder = recorder::Recorder::new(audio_tx, app_event_tx.clone());
+    let recorder =
+        recorder::Recorder::new(audio_tx, app_event_tx.clone(), config.input_device.clone());
     let mut transcriber =
         transcriber::Transcriber::new(audio_rx, app_event_tx.clone(), config.transcriber.clone());
     if let Err(err) = transcriber.start() {
