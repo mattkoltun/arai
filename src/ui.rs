@@ -567,12 +567,15 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 return Task::none();
             }
             debug!("UI copying text to clipboard");
+            let text = state.input.clone();
+            state.input.clear();
+            state.editor = text_editor::Content::new();
             let minimize = state
                 .window_id
                 .map(|id| window::minimize(id, true))
                 .unwrap_or(Task::none());
             Task::batch([
-                iced::clipboard::write::<Message>(state.input.clone()),
+                iced::clipboard::write::<Message>(text),
                 minimize,
             ])
         }
@@ -749,6 +752,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.command() => {
                 state.submit();
                 Task::none()
+            }
+            keyboard::Key::Character(ref c) if c.as_str() == "c" && modifiers.command() => {
+                update(state, Message::Copy)
             }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                 if state.config_open {
