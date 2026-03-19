@@ -851,7 +851,7 @@ fn view_main<'a>(
         button(icon('\u{E163}', 22.0))
             .style(icon_btn)
             .padding([8, 12])
-            .on_press_maybe((!listening).then_some(Message::Submit))
+            .on_press_maybe((!listening && has_text).then_some(Message::Submit))
     };
 
     // copy: E14D
