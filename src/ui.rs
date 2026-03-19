@@ -360,6 +360,8 @@ impl Ui {
                         instruction_editors: Vec::new(),
                         window_id: None,
                         pulse_phase: 0.0,
+                        undo_stack: Vec::new(),
+                        redo_stack: Vec::new(),
                         input: String::new(),
                         processed_text: None,
                         mode: AppMode::Idle,
@@ -385,6 +387,8 @@ impl Ui {
     }
 }
 
+const UNDO_LIMIT: usize = 100;
+
 struct UiRuntime {
     app_event_tx: AppEventSender,
     hotkey_handle: Option<Arc<HotkeyHandle>>,
@@ -395,6 +399,8 @@ struct UiRuntime {
     window_id: Option<window::Id>,
     /// Pulse phase in radians for the processing indicator animation.
     pulse_phase: f32,
+    undo_stack: Vec<String>,
+    redo_stack: Vec<String>,
     // State previously in UiState:
     input: String,
     processed_text: Option<String>,
@@ -437,6 +443,8 @@ enum Message {
     OverlapSecondsChanged(String),
     SilenceThresholdChanged(String),
     InputDeviceSelected(String),
+    Undo,
+    Redo,
     SwitchConfigTab(ConfigTab),
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
@@ -548,9 +556,37 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::EditorAction(action) => {
+            let is_edit = action.is_edit();
+            if is_edit {
+                state.undo_stack.push(state.input.clone());
+                if state.undo_stack.len() > UNDO_LIMIT {
+                    state.undo_stack.remove(0);
+                }
+                state.redo_stack.clear();
+            }
             state.editor.perform(action);
             if state.mode == AppMode::Idle {
                 state.input = state.editor.text();
+            }
+            Task::none()
+        }
+        Message::Undo => {
+            if let Some(text) = state.undo_stack.pop() {
+                let (line, col) = state.editor.cursor_position();
+                state.redo_stack.push(state.input.clone());
+                state.input = text;
+                state.editor = text_editor::Content::with_text(&state.input);
+                restore_cursor(&mut state.editor, line, col);
+            }
+            Task::none()
+        }
+        Message::Redo => {
+            if let Some(text) = state.redo_stack.pop() {
+                let (line, col) = state.editor.cursor_position();
+                state.undo_stack.push(state.input.clone());
+                state.input = text;
+                state.editor = text_editor::Content::with_text(&state.input);
+                restore_cursor(&mut state.editor, line, col);
             }
             Task::none()
         }
@@ -756,6 +792,16 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             keyboard::Key::Character(ref c) if c.as_str() == "c" && modifiers.command() => {
                 update(state, Message::Copy)
             }
+            keyboard::Key::Character(ref c)
+                if c.as_str() == "z" && modifiers.command() && modifiers.shift() =>
+            {
+                update(state, Message::Redo)
+            }
+            keyboard::Key::Character(ref c)
+                if c.as_str() == "z" && modifiers.command() && !modifiers.shift() =>
+            {
+                update(state, Message::Undo)
+            }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                 if state.config_open {
                     state.config_open = false;
@@ -764,6 +810,24 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
             _ => Task::none(),
         },
+    }
+}
+
+/// Moves the cursor in a freshly-created `Content` to `(line, col)`,
+/// clamping to the actual text bounds.
+fn restore_cursor(content: &mut text_editor::Content, line: usize, col: usize) {
+    let line_count = content.line_count();
+    let target_line = line.min(line_count.saturating_sub(1));
+    let line_len = content
+        .line(target_line)
+        .map(|l| l.len())
+        .unwrap_or(0);
+    let target_col = col.min(line_len);
+    for _ in 0..target_line {
+        content.perform(text_editor::Action::Move(text_editor::Motion::Down));
+    }
+    for _ in 0..target_col {
+        content.perform(text_editor::Action::Move(text_editor::Motion::Right));
     }
 }
 
@@ -822,7 +886,23 @@ fn view_main<'a>(
         .style(borderless_editor)
         .wrapping(text::Wrapping::Word)
         .padding(16)
-        .height(Fill);
+        .height(Fill)
+        .key_binding(|key_press| {
+            let keyboard::Key::Character(c) = &key_press.key else {
+                return text_editor::Binding::from_key_press(key_press);
+            };
+            if c.as_str() == "z" && key_press.modifiers.command() {
+                if key_press.modifiers.shift() {
+                    Some(text_editor::Binding::Custom(Message::Redo))
+                } else {
+                    Some(text_editor::Binding::Custom(Message::Undo))
+                }
+            } else if c.as_str() == "c" && key_press.modifiers.command() {
+                Some(text_editor::Binding::Custom(Message::Copy))
+            } else {
+                text_editor::Binding::from_key_press(key_press)
+            }
+        });
     if !listening && !processing {
         editor_widget = editor_widget.on_action(Message::EditorAction);
     }
