@@ -199,6 +199,40 @@ fn ghost_btn(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+fn hotkey_input(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+        _ => Color::from_rgba(1.0, 1.0, 1.0, 0.04),
+    };
+    button::Style {
+        text_color: TEXT_COLOR,
+        background: Some(Background::Color(bg)),
+        border: Border {
+            color: Color::from_rgb(0.22, 0.23, 0.27),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        shadow: Default::default(),
+        snap: false,
+    }
+}
+
+fn hotkey_input_active(_theme: &Theme, _status: button::Status) -> button::Style {
+    button::Style {
+        text_color: PINK,
+        background: Some(Background::Color(Color::from_rgba(
+            0.976, 0.361, 0.576, 0.08,
+        ))),
+        border: Border {
+            color: PINK,
+            width: 1.5,
+            radius: 8.0.into(),
+        },
+        shadow: Default::default(),
+        snap: false,
+    }
+}
+
 // ── Style: tab buttons ───────────────────────────────────────────────
 fn tab_btn_active(_theme: &Theme, status: button::Status) -> button::Style {
     let bg = match status {
@@ -349,6 +383,8 @@ struct SetupFields {
     silence_thresh: String,
     input_devices: Vec<String>,
     selected_input_device: Option<String>,
+    global_hotkey: String,
+    hotkey_listening: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -360,7 +396,7 @@ struct PromptEntry {
 #[derive(Clone)]
 pub struct Ui {
     app_event_tx: AppEventSender,
-    hotkey_handle: Option<Arc<HotkeyHandle>>,
+    hotkey_handle: Option<Arc<Mutex<HotkeyHandle>>>,
     ui_update_rx: Arc<Mutex<Option<UiUpdateReceiver>>>,
 }
 
@@ -372,7 +408,7 @@ impl Ui {
     ) -> Self {
         Self {
             app_event_tx,
-            hotkey_handle: hotkey_handle.map(Arc::new),
+            hotkey_handle: hotkey_handle.map(|h| Arc::new(Mutex::new(h))),
             ui_update_rx: Arc::new(Mutex::new(Some(ui_update_rx))),
         }
     }
@@ -406,12 +442,15 @@ impl Ui {
                     config_silence_threshold: String::new(),
                     config_input_devices: Vec::new(),
                     config_selected_input_device: None,
+                    config_global_hotkey: String::new(),
+                    config_hotkey_listening: false,
                     config_tab: ConfigTab::default(),
                     snapshot_prompts: Vec::new(),
                     snapshot_default: 0,
                     snapshot_transcriber: None,
                     snapshot_input_devices: Vec::new(),
                     snapshot_selected_input_device: None,
+                    snapshot_global_hotkey: String::new(),
                 },
                 Task::none(),
             )
@@ -433,7 +472,7 @@ const UNDO_LIMIT: usize = 100;
 
 struct UiRuntime {
     app_event_tx: AppEventSender,
-    hotkey_handle: Option<Arc<HotkeyHandle>>,
+    hotkey_handle: Option<Arc<Mutex<HotkeyHandle>>>,
     ui_update_rx: Arc<Mutex<Option<UiUpdateReceiver>>>,
     editor: text_editor::Content,
     status_line: String,
@@ -456,12 +495,15 @@ struct UiRuntime {
     config_silence_threshold: String,
     config_input_devices: Vec<String>,
     config_selected_input_device: Option<String>,
+    config_global_hotkey: String,
+    config_hotkey_listening: bool,
     config_tab: ConfigTab,
     snapshot_prompts: Vec<AgentPrompt>,
     snapshot_default: usize,
     snapshot_transcriber: Option<TranscriberConfig>,
     snapshot_input_devices: Vec<String>,
     snapshot_selected_input_device: Option<String>,
+    snapshot_global_hotkey: String,
 }
 
 #[derive(Debug, Clone)]
@@ -487,6 +529,8 @@ enum Message {
     OverlapSecondsChanged(String),
     SilenceThresholdChanged(String),
     InputDeviceSelected(String),
+    StartHotkeyCapture,
+    HotkeyCaptured(String),
     Undo,
     Redo,
     SwitchConfigTab(ConfigTab),
@@ -537,7 +581,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         Message::Tick => {
             // Poll global hotkey — toggle listen and focus window on press.
             let hotkey_fired = if let Some(ref handle) = state.hotkey_handle
-                && handle.poll_event()
+                && handle.lock().unwrap().poll_event()
             {
                 state.toggle_listen();
                 true
@@ -590,12 +634,14 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     transcriber,
                     input_devices,
                     selected_input_device,
+                    global_hotkey,
                 } => {
                     state.snapshot_prompts = agent_prompts;
                     state.snapshot_default = default_prompt;
                     state.snapshot_transcriber = Some(transcriber);
                     state.snapshot_input_devices = input_devices;
                     state.snapshot_selected_input_device = selected_input_device;
+                    state.snapshot_global_hotkey = global_hotkey;
                 }
             }
             Task::none()
@@ -671,6 +717,8 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_silence_threshold = tc.silence_threshold.to_string();
             state.config_input_devices = state.snapshot_input_devices.clone();
             state.config_selected_input_device = state.snapshot_selected_input_device.clone();
+            state.config_global_hotkey = state.snapshot_global_hotkey.clone();
+            state.config_hotkey_listening = false;
             state.config_tab = ConfigTab::Setup;
             state.config_open = true;
 
@@ -739,6 +787,19 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.send_event(AppEventKind::UiUpdateInputDevice(
                 state.config_selected_input_device.clone(),
             ));
+
+            // Re-register global hotkey if it changed.
+            if state.config_global_hotkey != state.snapshot_global_hotkey
+                && !state.config_global_hotkey.is_empty()
+            {
+                if let Some(ref handle) = state.hotkey_handle {
+                    let mut guard = handle.lock().unwrap();
+                    guard.re_register(&state.config_global_hotkey);
+                }
+                state.send_event(AppEventKind::UiUpdateGlobalHotkey(
+                    state.config_global_hotkey.clone(),
+                ));
+            }
 
             state.config_open = false;
             Task::none()
@@ -828,6 +889,15 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_selected_input_device = Some(value);
             Task::none()
         }
+        Message::StartHotkeyCapture => {
+            state.config_hotkey_listening = true;
+            Task::none()
+        }
+        Message::HotkeyCaptured(hotkey_str) => {
+            state.config_global_hotkey = hotkey_str;
+            state.config_hotkey_listening = false;
+            Task::none()
+        }
         Message::Shutdown => {
             state.send_event(AppEventKind::UiShutdown);
             iced::exit()
@@ -840,7 +910,16 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.window_id = Some(id);
             Task::none()
         }
-        Message::KeyPressed(key, modifiers) => match key {
+        Message::KeyPressed(key, modifiers) => {
+            // Intercept keypresses for global hotkey capture mode.
+            if state.config_hotkey_listening {
+                if let Some(hotkey_str) = iced_key_to_hotkey_string(&key, &modifiers) {
+                    return update(state, Message::HotkeyCaptured(hotkey_str));
+                }
+                // Ignore modifier-only presses, wait for a full combo.
+                return Task::none();
+            }
+            match key {
             keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.shift() => {
                 update(state, Message::Copy)
             }
@@ -866,14 +945,83 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 Task::none()
             }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                if state.config_open {
+                if state.config_hotkey_listening {
+                    state.config_hotkey_listening = false;
+                } else if state.config_open {
                     state.config_open = false;
                 }
                 Task::none()
             }
             _ => Task::none(),
-        },
+        }
+        }
     }
+}
+
+/// Converts an iced keyboard event into a `global-hotkey` format string
+/// (e.g. `"CmdOrCtrl+Shift+A"`). Returns `None` if only modifier keys
+/// are pressed without a main key.
+fn iced_key_to_hotkey_string(
+    key: &keyboard::Key,
+    modifiers: &keyboard::Modifiers,
+) -> Option<String> {
+    let main_key = match key {
+        keyboard::Key::Character(c) => {
+            let s = c.as_str().to_uppercase();
+            if s.is_empty() {
+                return None;
+            }
+            s
+        }
+        keyboard::Key::Named(named) => {
+            use keyboard::key::Named;
+            match named {
+                Named::Escape => "Escape".to_string(),
+                Named::Enter => "Enter".to_string(),
+                Named::Tab => "Tab".to_string(),
+                Named::Space => "Space".to_string(),
+                Named::Backspace => "Backspace".to_string(),
+                Named::Delete => "Delete".to_string(),
+                Named::ArrowUp => "ArrowUp".to_string(),
+                Named::ArrowDown => "ArrowDown".to_string(),
+                Named::ArrowLeft => "ArrowLeft".to_string(),
+                Named::ArrowRight => "ArrowRight".to_string(),
+                Named::Home => "Home".to_string(),
+                Named::End => "End".to_string(),
+                Named::PageUp => "PageUp".to_string(),
+                Named::PageDown => "PageDown".to_string(),
+                Named::F1 => "F1".to_string(),
+                Named::F2 => "F2".to_string(),
+                Named::F3 => "F3".to_string(),
+                Named::F4 => "F4".to_string(),
+                Named::F5 => "F5".to_string(),
+                Named::F6 => "F6".to_string(),
+                Named::F7 => "F7".to_string(),
+                Named::F8 => "F8".to_string(),
+                Named::F9 => "F9".to_string(),
+                Named::F10 => "F10".to_string(),
+                Named::F11 => "F11".to_string(),
+                Named::F12 => "F12".to_string(),
+                // Modifier-only presses — ignore them, wait for a real key.
+                Named::Shift | Named::Control | Named::Alt | Named::Super => return None,
+                _ => return None,
+            }
+        }
+        keyboard::Key::Unidentified => return None,
+    };
+
+    let mut parts = Vec::new();
+    if modifiers.command() {
+        parts.push("CmdOrCtrl");
+    }
+    if modifiers.shift() {
+        parts.push("Shift");
+    }
+    if modifiers.alt() {
+        parts.push("Alt");
+    }
+    parts.push(&main_key);
+    Some(parts.join("+"))
 }
 
 /// Moves the cursor in a freshly-created `Content` to `(line, col)`,
@@ -905,6 +1053,8 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
             silence_thresh: state.config_silence_threshold.clone(),
             input_devices: state.config_input_devices.clone(),
             selected_input_device: state.config_selected_input_device.clone(),
+            global_hotkey: state.config_global_hotkey.clone(),
+            hotkey_listening: state.config_hotkey_listening,
         };
         return view_config(
             state,
@@ -1208,8 +1358,45 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
     .spacing(10)
     .padding(14);
 
+    // ── Global Hotkey card ───────────────────────────────────────────
+    let hotkey_display = if sf.hotkey_listening {
+        "Press a key combination...".to_string()
+    } else if sf.global_hotkey.is_empty() {
+        "Not set".to_string()
+    } else {
+        sf.global_hotkey.clone()
+    };
+
+    let hotkey_btn = button(
+        text(hotkey_display)
+            .size(13)
+            .color(if sf.hotkey_listening { PINK } else { TEXT_COLOR }),
+    )
+    .style(if sf.hotkey_listening {
+        hotkey_input_active
+    } else {
+        hotkey_input
+    })
+    .padding(10)
+    .width(Fill)
+    .on_press(Message::StartHotkeyCapture);
+
+    let hotkey_card = column![
+        text("Keyboard Shortcut").size(15).color(TEXT_COLOR),
+        column![
+            text("Global Hotkey").size(11).color(MUTED),
+            hotkey_btn
+        ]
+        .spacing(4),
+    ]
+    .spacing(10)
+    .padding(14);
+
     column![
         container(mic_card).style(surface_container).width(Fill),
+        container(hotkey_card)
+            .style(surface_container)
+            .width(Fill),
         container(transcriber_card)
             .style(surface_container)
             .width(Fill),

@@ -7,6 +7,7 @@ pub struct AppStateSnapshot {
     pub default_prompt: usize,
     pub transcriber: TranscriberConfig,
     pub input_device: Option<String>,
+    pub global_hotkey: String,
 }
 
 /// Internal state protected by a single mutex to guarantee consistent reads
@@ -51,6 +52,7 @@ impl AppState {
             default_prompt: inner.default_prompt,
             transcriber: inner.transcriber.clone(),
             input_device: inner.config.input_device.clone(),
+            global_hotkey: inner.config.global_hotkey.clone(),
         }
     }
 
@@ -78,6 +80,14 @@ impl AppState {
     pub fn update_input_device(&self, device: Option<String>) {
         let mut inner = self.inner.lock().expect("app_state mutex poisoned");
         inner.config.input_device = device;
+        if let Err(e) = inner.config.save() {
+            log::error!("Failed to save config: {e}");
+        }
+    }
+
+    pub fn update_global_hotkey(&self, hotkey: String) {
+        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
+        inner.config.global_hotkey = hotkey;
         if let Err(e) = inner.config.save() {
             log::error!("Failed to save config: {e}");
         }

@@ -102,6 +102,7 @@ impl Controller {
             transcriber: snapshot.transcriber,
             input_devices: Recorder::list_input_devices(),
             selected_input_device: snapshot.input_device,
+            global_hotkey: snapshot.global_hotkey,
         });
     }
 
@@ -179,6 +180,11 @@ impl Controller {
                     info!("Controller updating input device: {:?}", device);
                     self.app_state.update_input_device(device.clone());
                     self.recorder.set_input_device(device);
+                    self.send_config_snapshot();
+                }
+                (AppEventSource::Ui, AppEventKind::UiUpdateGlobalHotkey(hotkey)) => {
+                    info!("Controller updating global hotkey: {hotkey}");
+                    self.app_state.update_global_hotkey(hotkey);
                     self.send_config_snapshot();
                 }
                 (source, kind) => {

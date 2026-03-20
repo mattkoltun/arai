@@ -25,6 +25,7 @@ pub enum UiUpdate {
         transcriber: TranscriberConfig,
         input_devices: Vec<String>,
         selected_input_device: Option<String>,
+        global_hotkey: String,
     },
 }
 
@@ -52,6 +53,7 @@ pub enum AppEventKind {
     },
     UiUpdateTranscriber(TranscriberConfig),
     UiUpdateInputDevice(Option<String>),
+    UiUpdateGlobalHotkey(String),
 }
 
 // #[derive(Clone, Debug)]
