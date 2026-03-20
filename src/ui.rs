@@ -535,6 +535,7 @@ enum Message {
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
     WindowOpened(window::Id),
+    DragWindow,
 }
 
 impl UiRuntime {
@@ -926,6 +927,13 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_tab = tab;
             Task::none()
         }
+        Message::DragWindow => {
+            if let Some(id) = state.window_id {
+                window::drag(id)
+            } else {
+                Task::none()
+            }
+        }
         Message::WindowOpened(id) => {
             state.window_id = Some(id);
             match load_window_icon() {
@@ -1117,7 +1125,7 @@ fn restore_cursor(content: &mut text_editor::Content, line: usize, col: usize) {
 // ── Views ────────────────────────────────────────────────────────────
 
 fn view(state: &UiRuntime) -> Element<'_, Message> {
-    if state.config_open {
+    let content = if state.config_open {
         let setup_fields = SetupFields {
             model_path: state.config_model_path.clone(),
             window_secs: state.config_window_seconds.clone(),
@@ -1128,25 +1136,29 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
             global_hotkey: state.config_global_hotkey.clone(),
             hotkey_listening: state.config_hotkey_listening,
         };
-        return view_config(
+        view_config(
             state,
             state.config_prompts.clone(),
             state.config_default,
             setup_fields,
             state.config_tab.clone(),
-        );
-    }
+        )
+    } else {
+        let listening = state.mode == AppMode::Listening;
+        let processing = state.mode == AppMode::Processing;
 
-    let listening = state.mode == AppMode::Listening;
-    let processing = state.mode == AppMode::Processing;
+        view_main(
+            state,
+            listening,
+            processing,
+            !state.input.trim().is_empty(),
+            state.input.chars().count(),
+        )
+    };
 
-    view_main(
-        state,
-        listening,
-        processing,
-        !state.input.trim().is_empty(),
-        state.input.chars().count(),
-    )
+    iced::widget::mouse_area(content)
+        .on_press(Message::DragWindow)
+        .into()
 }
 
 fn view_main<'a>(
