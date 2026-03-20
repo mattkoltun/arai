@@ -556,11 +556,13 @@ impl UiRuntime {
             self.send_event(AppEventKind::UiStopListening);
             self.mode = AppMode::Idle;
             self.status_line = "Ready".to_string();
+            play_blip();
         } else {
             debug!("UI starting listen");
             self.send_event(AppEventKind::UiStartListening(self.input.clone()));
             self.mode = AppMode::Listening;
             self.status_line = "Listening...".to_string();
+            play_blip();
         }
     }
 
@@ -1022,6 +1024,27 @@ fn iced_key_to_hotkey_string(
     }
     parts.push(&main_key);
     Some(parts.join("+"))
+}
+
+/// Embedded blip sound played when recording starts or stops.
+static BLIP_WAV: &[u8] = include_bytes!("../assets/sounds/blip.wav");
+
+/// Plays the blip sound on a background thread so it doesn't block the UI.
+fn play_blip() {
+    std::thread::spawn(|| {
+        let Ok((_stream, handle)) = rodio::OutputStream::try_default() else {
+            log::warn!("Failed to open audio output for blip sound");
+            return;
+        };
+        let cursor = std::io::Cursor::new(BLIP_WAV);
+        let Ok(source) = rodio::Decoder::new(cursor) else {
+            log::warn!("Failed to decode blip sound");
+            return;
+        };
+        let sink = rodio::Sink::try_new(&handle).unwrap();
+        sink.append(source);
+        sink.sleep_until_end();
+    });
 }
 
 /// Moves the cursor in a freshly-created `Content` to `(line, col)`,
