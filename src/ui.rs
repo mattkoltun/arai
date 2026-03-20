@@ -744,6 +744,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     state.snapshot_selected_input_device = selected_input_device;
                     state.snapshot_global_hotkey = global_hotkey;
                 }
+                UiUpdate::ModelDownloadProgress(_, _) => {}
+                UiUpdate::ModelDownloadComplete(_) => {}
+                UiUpdate::ModelDownloadFailed(_) => {}
+                UiUpdate::ModelDownloadCancelled => {}
             }
             Task::none()
         }
