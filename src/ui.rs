@@ -86,6 +86,7 @@ fn icon_btn(_theme: &Theme, status: button::Status) -> button::Style {
             radius: 0.0.into(),
         },
         shadow: Default::default(),
+        snap: false,
     }
 }
 
@@ -105,6 +106,7 @@ fn icon_btn_active(_theme: &Theme, status: button::Status) -> button::Style {
             radius: 0.0.into(),
         },
         shadow: Default::default(),
+        snap: false,
     }
 }
 
@@ -123,6 +125,7 @@ fn icon_btn_danger(_theme: &Theme, status: button::Status) -> button::Style {
             radius: 0.0.into(),
         },
         shadow: Default::default(),
+        snap: false,
     }
 }
 
@@ -137,6 +140,7 @@ fn bg_container(_theme: &Theme) -> container::Style {
             radius: 0.0.into(),
         },
         shadow: Default::default(),
+        snap: false,
     }
 }
 
@@ -150,6 +154,7 @@ fn surface_container(_theme: &Theme) -> container::Style {
             radius: 10.0.into(),
         },
         shadow: Default::default(),
+        snap: false,
     }
 }
 
@@ -169,6 +174,7 @@ fn primary_btn(_theme: &Theme, status: button::Status) -> button::Style {
             radius: 8.0.into(),
         },
         shadow: Default::default(),
+        snap: false,
     }
 }
 
@@ -189,6 +195,7 @@ fn ghost_btn(_theme: &Theme, status: button::Status) -> button::Style {
             radius: 8.0.into(),
         },
         shadow: Default::default(),
+        snap: false,
     }
 }
 
@@ -208,6 +215,7 @@ fn tab_btn_active(_theme: &Theme, status: button::Status) -> button::Style {
             radius: 6.0.into(),
         },
         shadow: Default::default(),
+        snap: false,
     }
 }
 
@@ -226,20 +234,21 @@ fn tab_btn_inactive(_theme: &Theme, status: button::Status) -> button::Style {
             radius: 6.0.into(),
         },
         shadow: Default::default(),
+        snap: false,
     }
 }
 
 // ── Style: text input / editor ───────────────────────────────────────
 fn borderless_input(_theme: &Theme, status: text_input::Status) -> text_input::Style {
     let border_color = match status {
-        text_input::Status::Focused => PINK,
+        text_input::Status::Focused { .. } => PINK,
         _ => Color::TRANSPARENT,
     };
     text_input::Style {
         background: Background::Color(SURFACE),
         border: Border {
             color: border_color,
-            width: if matches!(status, text_input::Status::Focused) {
+            width: if matches!(status, text_input::Status::Focused { .. }) {
                 1.0
             } else {
                 0.0
@@ -255,7 +264,7 @@ fn borderless_input(_theme: &Theme, status: text_input::Status) -> text_input::S
 
 fn styled_pick_list(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
     let border_color = match status {
-        pick_list::Status::Opened => PINK,
+        pick_list::Status::Opened { .. } => PINK,
         pick_list::Status::Hovered => Color::from_rgba(0.976, 0.361, 0.576, 0.4),
         _ => Color::TRANSPARENT,
     };
@@ -266,7 +275,7 @@ fn styled_pick_list(_theme: &Theme, status: pick_list::Status) -> pick_list::Sty
         handle_color: MUTED,
         border: Border {
             color: border_color,
-            width: if matches!(status, pick_list::Status::Opened) {
+            width: if matches!(status, pick_list::Status::Opened { .. }) {
                 1.0
             } else {
                 0.0
@@ -287,26 +296,26 @@ fn pick_list_menu(_theme: &Theme) -> overlay::menu::Style {
             width: 1.0,
             radius: 8.0.into(),
         },
+        shadow: Default::default(),
     }
 }
 
 fn borderless_editor(_theme: &Theme, status: text_editor::Status) -> text_editor::Style {
     let border_color = match status {
-        text_editor::Status::Focused => PINK,
+        text_editor::Status::Focused { .. } => PINK,
         _ => Color::TRANSPARENT,
     };
     text_editor::Style {
         background: Background::Color(SURFACE),
         border: Border {
             color: border_color,
-            width: if matches!(status, text_editor::Status::Focused) {
+            width: if matches!(status, text_editor::Status::Focused { .. }) {
                 1.0
             } else {
                 0.0
             },
             radius: 8.0.into(),
         },
-        icon: MUTED,
         placeholder: MUTED,
         value: TEXT_COLOR,
         selection: Color::from_rgba(0.976, 0.361, 0.576, 0.3),
@@ -369,7 +378,46 @@ impl Ui {
     }
 
     pub fn run(self) -> iced::Result {
-        iced::application("Arai", update, view)
+        let app_event_tx = self.app_event_tx;
+        let hotkey_handle = self.hotkey_handle;
+        let ui_update_rx = self.ui_update_rx;
+        let boot = move || {
+            (
+                UiRuntime {
+                    app_event_tx: app_event_tx.clone(),
+                    hotkey_handle: hotkey_handle.clone(),
+                    ui_update_rx: ui_update_rx.clone(),
+                    editor: text_editor::Content::new(),
+                    status_line: "Ready".to_string(),
+                    instruction_editors: Vec::new(),
+                    window_id: None,
+                    pulse_phase: 0.0,
+                    undo_stack: Vec::new(),
+                    redo_stack: Vec::new(),
+                    input: String::new(),
+                    processed_text: None,
+                    mode: AppMode::Idle,
+                    config_open: false,
+                    config_prompts: Vec::new(),
+                    config_default: 0,
+                    config_model_path: String::new(),
+                    config_window_seconds: String::new(),
+                    config_overlap_seconds: String::new(),
+                    config_silence_threshold: String::new(),
+                    config_input_devices: Vec::new(),
+                    config_selected_input_device: None,
+                    config_tab: ConfigTab::default(),
+                    snapshot_prompts: Vec::new(),
+                    snapshot_default: 0,
+                    snapshot_transcriber: None,
+                    snapshot_input_devices: Vec::new(),
+                    snapshot_selected_input_device: None,
+                },
+                Task::none(),
+            )
+        };
+        iced::application(boot, update, view)
+            .title("Arai")
             .theme(theme)
             .subscription(subscription)
             .window_size((480.0, 620.0))
@@ -377,41 +425,7 @@ impl Ui {
             .resizable(false)
             .font(include_bytes!("../assets/fonts/MaterialIcons-Regular.ttf").as_slice())
             .font(include_bytes!("../assets/fonts/Inter-Regular.ttf").as_slice())
-            .run_with(move || {
-                (
-                    UiRuntime {
-                        app_event_tx: self.app_event_tx,
-                        hotkey_handle: self.hotkey_handle,
-                        ui_update_rx: self.ui_update_rx,
-                        editor: text_editor::Content::new(),
-                        status_line: "Ready".to_string(),
-                        instruction_editors: Vec::new(),
-                        window_id: None,
-                        pulse_phase: 0.0,
-                        undo_stack: Vec::new(),
-                        redo_stack: Vec::new(),
-                        input: String::new(),
-                        processed_text: None,
-                        mode: AppMode::Idle,
-                        config_open: false,
-                        config_prompts: Vec::new(),
-                        config_default: 0,
-                        config_model_path: String::new(),
-                        config_window_seconds: String::new(),
-                        config_overlap_seconds: String::new(),
-                        config_silence_threshold: String::new(),
-                        config_input_devices: Vec::new(),
-                        config_selected_input_device: None,
-                        config_tab: ConfigTab::default(),
-                        snapshot_prompts: Vec::new(),
-                        snapshot_default: 0,
-                        snapshot_transcriber: None,
-                        snapshot_input_devices: Vec::new(),
-                        snapshot_selected_input_device: None,
-                    },
-                    Task::none(),
-                )
-            })
+            .run()
     }
 }
 
@@ -603,21 +617,21 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::Undo => {
             if let Some(text) = state.undo_stack.pop() {
-                let (line, col) = state.editor.cursor_position();
+                let pos = state.editor.cursor().position;
                 state.redo_stack.push(state.input.clone());
                 state.input = text;
                 state.editor = text_editor::Content::with_text(&state.input);
-                restore_cursor(&mut state.editor, line, col);
+                restore_cursor(&mut state.editor, pos.line, pos.column);
             }
             Task::none()
         }
         Message::Redo => {
             if let Some(text) = state.redo_stack.pop() {
-                let (line, col) = state.editor.cursor_position();
+                let pos = state.editor.cursor().position;
                 state.undo_stack.push(state.input.clone());
                 state.input = text;
                 state.editor = text_editor::Content::with_text(&state.input);
-                restore_cursor(&mut state.editor, line, col);
+                restore_cursor(&mut state.editor, pos.line, pos.column);
             }
             Task::none()
         }
@@ -869,7 +883,7 @@ fn restore_cursor(content: &mut text_editor::Content, line: usize, col: usize) {
     let target_line = line.min(line_count.saturating_sub(1));
     let line_len = content
         .line(target_line)
-        .map(|l| l.len())
+        .map(|l| l.text.len())
         .unwrap_or(0);
     let target_col = col.min(line_len);
     for _ in 0..target_line {
@@ -1292,33 +1306,50 @@ fn subscription(state: &UiRuntime) -> Subscription<Message> {
     let ui_update_rx = state.ui_update_rx.clone();
     Subscription::batch([
         time::every(Duration::from_millis(16)).map(|_| Message::Tick),
-        keyboard::on_key_press(|key, modifiers| Some(Message::KeyPressed(key, modifiers))),
+        keyboard::listen().map(|event| match event {
+            keyboard::Event::KeyPressed {
+                key, modifiers, ..
+            } => Message::KeyPressed(key, modifiers),
+            _ => Message::Tick,
+        }),
         window::open_events().map(Message::WindowOpened),
-        Subscription::run_with_id(
-            "ui-updates",
-            iced::stream::channel(100, move |mut sender| async move {
-                let rx = {
-                    let mut guard = ui_update_rx.lock().unwrap();
-                    guard.take()
-                };
-                if let Some(rx) = rx {
-                    std::thread::spawn(move || {
-                        while let Ok(update) = rx.recv() {
-                            if futures::executor::block_on(
-                                sender.send(Message::UiUpdateReceived(update)),
-                            )
-                            .is_err()
-                            {
-                                log::warn!("UI channel closed, bridge exiting");
-                                break;
-                            }
-                        }
-                    });
-                }
-                std::future::pending::<()>().await;
-            }),
-        ),
+        Subscription::run_with(UiUpdateBridge(ui_update_rx), ui_update_stream),
     ])
+}
+
+struct UiUpdateBridge(Arc<Mutex<Option<UiUpdateReceiver>>>);
+
+impl std::hash::Hash for UiUpdateBridge {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        "ui-update-bridge".hash(state);
+    }
+}
+
+fn ui_update_stream(
+    bridge: &UiUpdateBridge,
+) -> std::pin::Pin<Box<dyn futures::Stream<Item = Message> + Send>> {
+    let rx = bridge.0.clone();
+    Box::pin(iced::stream::channel(100, move |mut sender: futures::channel::mpsc::Sender<Message>| async move {
+        let rx = {
+            let mut guard = rx.lock().unwrap();
+            guard.take()
+        };
+        if let Some(rx) = rx {
+            std::thread::spawn(move || {
+                while let Ok(update) = rx.recv() {
+                    if futures::executor::block_on(
+                        sender.send(Message::UiUpdateReceived(update)),
+                    )
+                    .is_err()
+                    {
+                        log::warn!("UI channel closed, bridge exiting");
+                        break;
+                    }
+                }
+            });
+        }
+        std::future::pending::<()>().await;
+    }))
 }
 
 fn theme(_state: &UiRuntime) -> Theme {
@@ -1329,6 +1360,7 @@ fn theme(_state: &UiRuntime) -> Theme {
             text: TEXT_COLOR,
             primary: PINK,
             success: GREEN,
+            warning: Color::from_rgb(0.976, 0.659, 0.145),
             danger: RED,
         },
     )

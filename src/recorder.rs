@@ -72,7 +72,7 @@ impl Recorder {
                     return;
                 }
             };
-            let sample_rate = config.sample_rate().0;
+            let sample_rate = config.sample_rate();
             let channels = config.channels();
             let stream_config: cpal::StreamConfig = config.clone().into();
             let audio_tx_final = audio_tx.clone();
@@ -194,7 +194,9 @@ impl Recorder {
         let Ok(devices) = host.input_devices() else {
             return Vec::new();
         };
-        devices.filter_map(|d| d.name().ok()).collect()
+        devices
+            .filter_map(|d| d.description().ok().map(|desc| desc.name().to_string()))
+            .collect()
     }
 
     /// Updates the input device used for future recordings.
@@ -211,10 +213,10 @@ impl Recorder {
                 .input_devices()
                 .map_err(|e| format!("Failed to list input devices: {e}"))?;
             for device in devices {
-                if let Ok(dev_name) = device.name()
-                    && dev_name == wanted
+                if let Ok(desc) = device.description()
+                    && desc.name() == wanted
                 {
-                    info!("Using input device: {dev_name}");
+                    info!("Using input device: {}", desc.name());
                     return Ok(device);
                 }
             }

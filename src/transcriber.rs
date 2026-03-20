@@ -181,7 +181,7 @@ fn transcribe_audio(ctx: &WhisperContext, audio: &[f32]) -> Result<String, Whisp
     params.set_print_timestamps(false);
     params.set_print_special(false);
     params.set_suppress_blank(true);
-    params.set_suppress_non_speech_tokens(true);
+    params.set_suppress_nst(true);
     params.set_no_context(true);
     params.set_single_segment(true);
     params.set_temperature_inc(0.0);
@@ -192,15 +192,18 @@ fn transcribe_audio(ctx: &WhisperContext, audio: &[f32]) -> Result<String, Whisp
 
 /// Extracts and concatenates all text segments from a completed Whisper state.
 fn collect_segments(state: &whisper_rs::WhisperState) -> Result<String, WhisperError> {
-    let segments = state.full_n_segments()?;
+    let segments = state.full_n_segments();
     debug!("Transcription segments: {}", segments);
     let mut output = String::new();
     for i in 0..segments {
-        let segment = state.full_get_segment_text(i)?;
+        let Some(segment) = state.get_segment(i) else {
+            continue;
+        };
+        let text = segment.to_str()?;
         if !output.is_empty() {
             output.push(' ');
         }
-        output.push_str(segment.trim());
+        output.push_str(text.trim());
     }
     Ok(output)
 }
