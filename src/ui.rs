@@ -1079,6 +1079,19 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     hide_app();
                     Task::none()
                 }
+                keyboard::Key::Character(ref c)
+                    if modifiers.command()
+                        && c.as_str().len() == 1
+                        && c.as_str().as_bytes()[0].is_ascii_digit() =>
+                {
+                    let digit = c.as_str().as_bytes()[0] - b'0';
+                    let idx = if digit == 0 {
+                        state.snapshot_prompts.len().saturating_sub(1)
+                    } else {
+                        (digit as usize).saturating_sub(1)
+                    };
+                    update(state, Message::SelectActivePrompt(idx))
+                }
                 keyboard::Key::Named(keyboard::key::Named::Escape) => {
                     if state.config_hotkey_listening {
                         state.config_hotkey_listening = false;
