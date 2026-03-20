@@ -18,10 +18,12 @@ global-hotkey = "0.7"
 rodio = "0.20"
 futures = "0.3"
 rfd = "0.17"
+png = "0.17"
 
 [package.metadata.bundle]
 name = "Arai"
 identifier = "com.arai.app"
+icon = ["assets/images/logo.icns", "assets/images/logo.png"]
 category = "public.app-category.productivity"
 short_description = "Voice-first prompt and writing assistant"
 

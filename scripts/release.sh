@@ -123,8 +123,15 @@ release_macos() {
     local dmg_path="$DIST_DIR/${APP_DISPLAY_NAME}-${VERSION}-macos-universal.dmg"
 
     # create-dmg returns non-zero if it can't set the icon, which is fine
+    local volicon_args=()
+    local logo_icns="$PROJECT_ROOT/assets/images/logo.icns"
+    if [[ -f "$logo_icns" ]]; then
+        volicon_args=(--volicon "$logo_icns")
+    fi
+
     create-dmg \
         --volname "$APP_DISPLAY_NAME" \
+        "${volicon_args[@]}" \
         --window-pos 200 120 \
         --window-size 600 400 \
         --icon-size 100 \

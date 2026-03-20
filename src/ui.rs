@@ -910,7 +910,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::WindowOpened(id) => {
             state.window_id = Some(id);
-            Task::none()
+            match load_window_icon() {
+                Some(icon) => window::set_icon(id, icon),
+                None => Task::none(),
+            }
         }
         Message::KeyPressed(key, modifiers) => {
             // Intercept keypresses for global hotkey capture mode.
@@ -1028,6 +1031,7 @@ fn iced_key_to_hotkey_string(
 
 /// Embedded blip sound played when recording starts or stops.
 static BLIP_WAV: &[u8] = include_bytes!("../assets/sounds/blip.wav");
+static LOGO_PNG: &[u8] = include_bytes!("../assets/images/logo.png");
 
 /// Plays the blip sound on a background thread so it doesn't block the UI.
 fn play_blip() {
@@ -1045,6 +1049,16 @@ fn play_blip() {
         sink.append(source);
         sink.sleep_until_end();
     });
+}
+
+/// Decodes the embedded logo PNG and returns an iced window icon.
+fn load_window_icon() -> Option<window::Icon> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(LOGO_PNG));
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    buf.truncate(info.buffer_size());
+    window::icon::from_rgba(buf, info.width, info.height).ok()
 }
 
 /// Moves the cursor in a freshly-created `Content` to `(line, col)`,
