@@ -16,6 +16,34 @@ use log::debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Hides the application and returns focus to the previously active app.
+#[cfg(target_os = "macos")]
+fn hide_app() {
+    use objc2_app_kit::NSApplication;
+    // Safety: iced runs the UI on the main thread.
+    let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+    let app = NSApplication::sharedApplication(mtm);
+    app.hide(None);
+}
+
+/// Un-hides the application and brings it to the front.
+#[cfg(target_os = "macos")]
+fn show_app() {
+    use objc2_app_kit::NSApplication;
+    // Safety: iced runs the UI on the main thread.
+    let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+    let app = NSApplication::sharedApplication(mtm);
+    app.unhide(None);
+    #[allow(deprecated)]
+    app.activateIgnoringOtherApps(true);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hide_app() {}
+
+#[cfg(not(target_os = "macos"))]
+fn show_app() {}
+
 // ── Palette constants ────────────────────────────────────────────────
 const BG: Color = Color::from_rgb(0.082, 0.090, 0.118); // #151724 dark graphite-blue
 const SURFACE: Color = Color::from_rgb(0.118, 0.125, 0.157); // #1E2028 slightly lighter
@@ -509,6 +537,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
 
             if hotkey_fired {
+                show_app();
                 if let Some(id) = state.window_id {
                     window::gain_focus(id)
                 } else {
@@ -606,14 +635,8 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             let text = state.input.clone();
             state.input.clear();
             state.editor = text_editor::Content::new();
-            let minimize = state
-                .window_id
-                .map(|id| window::minimize(id, true))
-                .unwrap_or(Task::none());
-            Task::batch([
-                iced::clipboard::write::<Message>(text),
-                minimize,
-            ])
+            hide_app();
+            iced::clipboard::write::<Message>(text)
         }
         Message::OpenConfig => {
             state.config_prompts = state
@@ -801,6 +824,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 if c.as_str() == "z" && modifiers.command() && !modifiers.shift() =>
             {
                 update(state, Message::Undo)
+            }
+            keyboard::Key::Character(ref c) if c.as_str() == "w" && modifiers.command() => {
+                hide_app();
+                Task::none()
             }
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                 if state.config_open {
