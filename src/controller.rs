@@ -1,6 +1,7 @@
 use crate::agent::Agent;
 use crate::app_state::AppStateHandle;
 use crate::channels::{AppEventReceiver, AppEventSender, UiUpdateSender};
+use crate::config::TranscriberConfig;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, UiUpdate};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
@@ -139,6 +140,23 @@ impl Controller {
         });
     }
 
+    /// Stops the current transcriber and starts a new one with updated config.
+    /// Creates a fresh audio channel and wires it to the recorder.
+    fn restart_transcriber(&mut self, config: TranscriberConfig) {
+        info!("Restarting transcriber with new config");
+        self.transcriber.stop();
+        // Drop the old transcriber to join its worker thread.
+        let old = std::mem::replace(&mut self.transcriber, {
+            let (audio_tx, audio_rx) = std::sync::mpsc::channel();
+            self.recorder.set_audio_tx(audio_tx);
+            Transcriber::new(audio_rx, self.app_event_tx.clone(), config)
+        });
+        drop(old);
+        if let Err(e) = self.transcriber.start() {
+            error!("Failed to restart transcriber: {e}");
+        }
+    }
+
     /// Sends a `ConfigSnapshot` to the UI so it has the current config state.
     fn send_config_snapshot(&self) {
         let snapshot = self.app_state.snapshot();
@@ -265,7 +283,16 @@ impl Controller {
                 }
                 (AppEventSource::Ui, AppEventKind::UiUpdateTranscriber(transcriber_config)) => {
                     info!("Controller updating transcriber config");
-                    self.app_state.update_transcriber(transcriber_config);
+                    let old = self.app_state.transcriber_config();
+                    let needs_restart = old.use_gpu != transcriber_config.use_gpu
+                        || old.flash_attn != transcriber_config.flash_attn
+                        || old.no_timestamps != transcriber_config.no_timestamps
+                        || old.model_path != transcriber_config.model_path;
+                    self.app_state
+                        .update_transcriber(transcriber_config.clone());
+                    if needs_restart {
+                        self.restart_transcriber(transcriber_config);
+                    }
                     self.send_config_snapshot();
                 }
                 (AppEventSource::Ui, AppEventKind::UiUpdateInputDevice(device)) => {

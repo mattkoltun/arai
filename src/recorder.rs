@@ -40,6 +40,11 @@ impl Recorder {
         }
     }
 
+    /// Replaces the audio sender so new recordings go to a different receiver.
+    pub fn set_audio_tx(&mut self, tx: AudioSender) {
+        self.audio_tx = tx;
+    }
+
     pub fn start(&mut self) -> Result<(), RecorderError> {
         if self.handle.is_some() {
             return Err(RecorderError::AlreadyRunning);
