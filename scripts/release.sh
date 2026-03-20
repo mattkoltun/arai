@@ -137,8 +137,12 @@ release_macos() {
         --icon-size 100 \
         --icon "${APP_DISPLAY_NAME}.app" 175 190 \
         --app-drop-link 425 190 \
+        --no-internet-enable \
         "$dmg_path" \
         "$app_bundle" || true
+
+    # Eject any volumes left mounted by create-dmg.
+    hdiutil detach "/Volumes/$APP_DISPLAY_NAME" 2>/dev/null || true
 
     if [[ -f "$dmg_path" ]]; then
         echo "    -> $dmg_path"
