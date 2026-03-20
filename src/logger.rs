@@ -42,12 +42,27 @@ impl Default for LogConfig {
     fn default() -> Self {
         Self {
             level: LevelFilter::Debug,
-            path: PathBuf::from("/var/log/arai.log"),
+            path: default_log_path(),
         }
     }
 }
 
+/// Returns a user-writable log path appropriate for the platform.
+/// - macOS: `~/Library/Logs/arai.log`
+/// - Linux/other: `~/.local/share/arai/arai.log`
+fn default_log_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    if cfg!(target_os = "macos") {
+        PathBuf::from(home).join("Library/Logs/arai.log")
+    } else {
+        PathBuf::from(home).join(".local/share/arai/arai.log")
+    }
+}
+
 pub fn init_with_config(config: LogConfig) -> Result<(), LoggerInitError> {
+    if let Some(parent) = config.path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let file = OpenOptions::new()
         .create(true)
         .append(true)

@@ -160,7 +160,7 @@ impl PartialConfig {
     fn default_layer() -> Self {
         Self {
             log_level: Some("debug".to_string()),
-            log_path: Some("/var/log/arai.log".to_string()),
+            log_path: Some(logger::LogConfig::default().path.display().to_string()),
             open_api_key: None,
             agent_prompts: Some(vec![AgentPrompt {
                 name: "default".to_string(),

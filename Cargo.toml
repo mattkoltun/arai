@@ -26,6 +26,7 @@ identifier = "com.arai.app"
 icon = ["assets/images/logo.icns", "assets/images/logo.png"]
 category = "public.app-category.productivity"
 short_description = "Voice-first prompt and writing assistant"
+osx_info_plist_exts = ["assets/macos/info-plist-ext.xml"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = "0.3"
