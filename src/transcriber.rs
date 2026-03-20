@@ -104,6 +104,14 @@ impl Drop for Transcriber {
     }
 }
 
+/// Returns context parameters with GPU and flash attention enabled.
+fn gpu_context_params() -> WhisperContextParameters<'static> {
+    let mut params = WhisperContextParameters::default();
+    params.use_gpu(true);
+    params.flash_attn(true);
+    params
+}
+
 /// Main transcriber loop. Loads the Whisper model, then continuously receives
 /// audio chunks, accumulates them into a buffer, and runs transcription when
 /// the buffer reaches the configured window size or a final chunk is received.
@@ -115,10 +123,7 @@ fn worker(
     stop_flag: Arc<AtomicBool>,
     drain_flag: Arc<AtomicBool>,
 ) {
-    let ctx = match WhisperContext::new_with_params(
-        &config.model_path,
-        WhisperContextParameters::default(),
-    ) {
+    let ctx = match WhisperContext::new_with_params(&config.model_path, gpu_context_params()) {
         Ok(c) => c,
         Err(err) => {
             error!("Failed to load model: {err}");
@@ -228,7 +233,7 @@ pub fn transcribe_wav_file(model_path: &str, wav_path: &str) -> Result<String, S
         samples.len() as f32 / TARGET_SAMPLE_RATE as f32,
         energy,
     );
-    let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+    let ctx = WhisperContext::new_with_params(model_path, gpu_context_params())
         .map_err(|e| format!("Failed to load model: {e}"))?;
     transcribe_audio_full(&ctx, &samples).map_err(|e| format!("Transcription error: {e}"))
 }
@@ -309,6 +314,7 @@ fn transcribe_audio_full(ctx: &WhisperContext, audio: &[f32]) -> Result<String, 
     params.set_language(Some("en"));
     params.set_translate(false);
     params.set_n_threads(num_cpus());
+    params.set_no_timestamps(true);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
@@ -332,6 +338,7 @@ fn transcribe_audio(ctx: &WhisperContext, audio: &[f32]) -> Result<String, Whisp
     params.set_language(Some("en"));
     params.set_translate(false);
     params.set_n_threads(num_cpus());
+    params.set_no_timestamps(true);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
