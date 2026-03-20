@@ -179,6 +179,46 @@ fn primary_btn(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+// Carousel chip — selected state
+fn carousel_chip_active(_theme: &Theme, status: button::Status) -> button::Style {
+    let bg = match status {
+        button::Status::Hovered => Color::from_rgba(0.976, 0.361, 0.576, 0.18),
+        button::Status::Pressed => Color::from_rgba(0.976, 0.361, 0.576, 0.28),
+        _ => Color::from_rgba(0.976, 0.361, 0.576, 0.12),
+    };
+    button::Style {
+        text_color: PINK,
+        background: Some(Background::Color(bg)),
+        border: Border {
+            color: Color::from_rgba(0.976, 0.361, 0.576, 0.3),
+            width: 1.0,
+            radius: 14.0.into(),
+        },
+        shadow: Default::default(),
+        snap: false,
+    }
+}
+
+// Carousel chip — inactive state
+fn carousel_chip_inactive(_theme: &Theme, status: button::Status) -> button::Style {
+    let (bg, text_color) = match status {
+        button::Status::Hovered => (Color::from_rgba(1.0, 1.0, 1.0, 0.06), TEXT_COLOR),
+        button::Status::Pressed => (Color::from_rgba(1.0, 1.0, 1.0, 0.10), TEXT_COLOR),
+        _ => (Color::TRANSPARENT, MUTED),
+    };
+    button::Style {
+        text_color,
+        background: Some(Background::Color(bg)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 14.0.into(),
+        },
+        shadow: Default::default(),
+        snap: false,
+    }
+}
+
 // Ghost button for config items (add prompt, etc)
 fn ghost_btn(_theme: &Theme, status: button::Status) -> button::Style {
     let (bg, text_color) = match status {
@@ -451,6 +491,7 @@ impl Ui {
                     config_flash_attn: true,
                     config_no_timestamps: true,
                     config_tab: ConfigTab::default(),
+                    active_prompt: 0,
                     snapshot_prompts: Vec::new(),
                     snapshot_default: 0,
                     snapshot_transcriber: None,
@@ -506,6 +547,8 @@ struct UiRuntime {
     config_flash_attn: bool,
     config_no_timestamps: bool,
     config_tab: ConfigTab,
+    /// Index of the prompt currently selected in the main view carousel.
+    active_prompt: usize,
     snapshot_prompts: Vec<AgentPrompt>,
     snapshot_default: usize,
     snapshot_transcriber: Option<TranscriberConfig>,
@@ -540,6 +583,7 @@ enum Message {
     HotkeyCaptured(String),
     Undo,
     Redo,
+    SelectActivePrompt(usize),
     UseGpuToggled(bool),
     FlashAttnToggled(bool),
     NoTimestampsToggled(bool),
@@ -581,11 +625,19 @@ impl UiRuntime {
         if self.mode != AppMode::Idle || self.input.trim().is_empty() {
             return;
         }
+        let instruction = self
+            .snapshot_prompts
+            .get(self.active_prompt)
+            .map(|p| p.instruction.clone())
+            .unwrap_or_default();
         self.mode = AppMode::Processing;
         self.processed_text = None;
         self.status_line = "Processing...".to_string();
         debug!("UI submit requested");
-        self.send_event(AppEventKind::UiSubmitText(self.input.clone()));
+        self.send_event(AppEventKind::UiSubmitText {
+            text: self.input.clone(),
+            instruction,
+        });
     }
 }
 
@@ -682,6 +734,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     selected_input_device,
                     global_hotkey,
                 } => {
+                    // Sync active_prompt to default when prompts change.
+                    if state.active_prompt >= agent_prompts.len() {
+                        state.active_prompt = default_prompt;
+                    }
                     state.snapshot_prompts = agent_prompts;
                     state.snapshot_default = default_prompt;
                     state.snapshot_transcriber = Some(transcriber);
@@ -934,6 +990,12 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::SilenceThresholdChanged(value) => {
             state.config_silence_threshold = value;
+            Task::none()
+        }
+        Message::SelectActivePrompt(idx) => {
+            if idx < state.snapshot_prompts.len() {
+                state.active_prompt = idx;
+            }
             Task::none()
         }
         Message::InputDeviceSelected(value) => {
@@ -1323,7 +1385,33 @@ fn view_main<'a>(
     ]
     .spacing(6);
 
+    // ── Prompt carousel ──────────────────────────────────────────────
+    let prompt_carousel = {
+        let mut chips = row![].spacing(6).align_y(iced::Alignment::Center);
+        for (idx, prompt) in state.snapshot_prompts.iter().enumerate() {
+            let is_active = idx == state.active_prompt;
+            let chip = button(text(&prompt.name).size(12))
+                .style(if is_active {
+                    carousel_chip_active
+                } else {
+                    carousel_chip_inactive
+                })
+                .padding([4, 12])
+                .on_press(Message::SelectActivePrompt(idx));
+            chips = chips.push(chip);
+        }
+        container(
+            scrollable(chips)
+                .direction(scrollable::Direction::Horizontal(
+                    scrollable::Scrollbar::new(),
+                ))
+                .width(Fill),
+        )
+        .padding([0, 14])
+    };
+
     let body = column![
+        prompt_carousel,
         container(editor_widget)
             .style(surface_container)
             .padding(4)

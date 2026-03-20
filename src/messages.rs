@@ -52,7 +52,11 @@ pub enum AppEventKind {
     ReconciliationComplete(String),
     UiStartListening(String),
     UiStopListening,
-    UiSubmitText(String),
+    /// Submit text for processing with the given agent instruction.
+    UiSubmitText {
+        text: String,
+        instruction: String,
+    },
     UiShutdown,
     AgentResponse(String),
     UiUpdatePrompts {

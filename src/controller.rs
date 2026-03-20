@@ -83,8 +83,7 @@ impl Controller {
             .send(UiUpdate::AgentResponseReceived(text));
     }
 
-    fn submit_text(&self, text: String) {
-        let instruction = self.app_state.agent_instruction();
+    fn submit_text(&self, instruction: String, text: String) {
         debug!(
             "Controller submitting text with instruction: {}",
             &instruction[..instruction.len().min(80)]
@@ -264,8 +263,8 @@ impl Controller {
                 (AppEventSource::Ui, AppEventKind::UiStopListening) => {
                     self.stop_listening();
                 }
-                (AppEventSource::Ui, AppEventKind::UiSubmitText(text)) => {
-                    self.submit_text(text);
+                (AppEventSource::Ui, AppEventKind::UiSubmitText { text, instruction }) => {
+                    self.submit_text(instruction, text);
                 }
                 (AppEventSource::Ui, AppEventKind::UiShutdown) => {
                     self.shutting_down.store(true, Ordering::SeqCst);

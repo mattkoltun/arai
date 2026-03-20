@@ -98,15 +98,6 @@ impl AppState {
         let inner = self.inner.lock().expect("app_state mutex poisoned");
         inner.transcriber.clone()
     }
-
-    pub fn agent_instruction(&self) -> String {
-        let inner = self.inner.lock().expect("app_state mutex poisoned");
-        inner
-            .agent_prompts
-            .get(inner.default_prompt)
-            .map(|a| a.instruction.clone())
-            .unwrap_or_default()
-    }
 }
 
 #[cfg(test)]
