@@ -467,6 +467,8 @@ enum Message {
     PromptNameChanged(usize, String),
     PromptInstructionAction(usize, text_editor::Action),
     ModelPathChanged(String),
+    BrowseModelPath,
+    ModelPathPicked(Option<String>),
     WindowSecondsChanged(String),
     OverlapSecondsChanged(String),
     SilenceThresholdChanged(String),
@@ -777,6 +779,23 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::ModelPathChanged(value) => {
             state.config_model_path = value;
+            Task::none()
+        }
+        Message::BrowseModelPath => Task::perform(
+            async {
+                let handle = rfd::AsyncFileDialog::new()
+                    .set_title("Select Whisper Model")
+                    .add_filter("GGML Model", &["bin"])
+                    .pick_file()
+                    .await;
+                handle.map(|h| h.path().to_string_lossy().into_owned())
+            },
+            Message::ModelPathPicked,
+        ),
+        Message::ModelPathPicked(path) => {
+            if let Some(path) = path {
+                state.config_model_path = path;
+            }
             Task::none()
         }
         Message::WindowSecondsChanged(value) => {
@@ -1132,6 +1151,16 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
         .padding(10)
         .on_input(Message::ModelPathChanged);
 
+    // folder_open: E2C8
+    let browse_btn = button(icon('\u{E2C8}', 18.0))
+        .style(icon_btn)
+        .padding([8, 10])
+        .on_press(Message::BrowseModelPath);
+
+    let model_path_row = row![container(model_path_input).width(Fill), browse_btn]
+        .spacing(4)
+        .align_y(iced::Alignment::Center);
+
     let window_secs_input = text_input("Window seconds", &sf.window_secs)
         .style(borderless_input)
         .padding(10)
@@ -1149,7 +1178,7 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
 
     let transcriber_card = column![
         text("Transcriber").size(15).color(TEXT_COLOR),
-        column![text("Model Path").size(11).color(MUTED), model_path_input].spacing(4),
+        column![text("Model Path").size(11).color(MUTED), model_path_row].spacing(4),
         column![text("Window (s)").size(11).color(MUTED), window_secs_input].spacing(4),
         column![
             text("Overlap (s)").size(11).color(MUTED),

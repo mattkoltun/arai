@@ -16,6 +16,13 @@ serde_json = "1"
 serde_yaml = "0.9"
 global-hotkey = "0.6"
 futures = "0.3"
+rfd = "0.15"
+
+[package.metadata.bundle]
+name = "Arai"
+identifier = "com.arai.app"
+category = "public.app-category.productivity"
+short_description = "Voice-first prompt and writing assistant"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = "0.3"
