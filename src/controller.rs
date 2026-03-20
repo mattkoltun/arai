@@ -63,11 +63,15 @@ impl Controller {
 
     fn start_listening(&mut self) {
         info!("Controller starting recorder");
+        self.transcriber.reset_drain();
         let _ = self.recorder.start();
     }
 
     fn stop_listening(&self) {
         info!("Controller signaling recorder to stop");
+        // Tell the transcriber to drain buffered chunks without inference.
+        // The full audio is saved to WAV for reconciliation anyway.
+        self.transcriber.drain_without_inference();
         self.recorder.stop_signal();
     }
 
@@ -175,9 +179,7 @@ impl Controller {
                     info!("Recorder stopped, joining handle");
                     self.recorder.join_handle();
                     wav_path_ready = wav_path;
-                    if streaming_drained
-                        && let Some(path) = wav_path_ready.take()
-                    {
+                    if streaming_drained && let Some(path) = wav_path_ready.take() {
                         reconciling = true;
                         self.start_reconciliation(path);
                     }

@@ -34,6 +34,10 @@ pub struct Transcriber {
     config: TranscriberConfig,
     handle: Option<JoinHandle<()>>,
     stop_flag: Arc<AtomicBool>,
+    /// When set, the worker drains buffered chunks without running Whisper
+    /// inference. Used after recording stops so reconciliation can start
+    /// sooner — the full audio is already saved to a WAV file.
+    drain_flag: Arc<AtomicBool>,
 }
 
 impl Transcriber {
@@ -50,6 +54,7 @@ impl Transcriber {
             config,
             handle: None,
             stop_flag: Arc::new(AtomicBool::new(false)),
+            drain_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -65,14 +70,27 @@ impl Transcriber {
         let app_event_tx = self.app_event_tx.clone();
         let config = self.config.clone();
         let stop_flag = Arc::clone(&self.stop_flag);
+        let drain_flag = Arc::clone(&self.drain_flag);
         self.handle = Some(thread::spawn(move || {
-            worker(audio_rx, app_event_tx, config, stop_flag)
+            worker(audio_rx, app_event_tx, config, stop_flag, drain_flag)
         }));
         Ok(())
     }
 
+    /// Tells the worker to drain remaining chunks without running inference.
+    /// The full audio is already saved to a WAV file for reconciliation.
+    pub fn drain_without_inference(&self) {
+        self.drain_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Resets the drain flag so the next recording session runs normally.
+    pub fn reset_drain(&self) {
+        self.drain_flag.store(false, Ordering::SeqCst);
+    }
+
     /// Signals the worker to stop processing and exit promptly.
     pub fn stop(&self) {
+        self.drain_flag.store(true, Ordering::SeqCst);
         self.stop_flag.store(true, Ordering::SeqCst);
     }
 }
@@ -95,6 +113,7 @@ fn worker(
     app_event_tx: AppEventSender,
     config: TranscriberConfig,
     stop_flag: Arc<AtomicBool>,
+    drain_flag: Arc<AtomicBool>,
 ) {
     let ctx = match WhisperContext::new_with_params(
         &config.model_path,
@@ -119,6 +138,20 @@ fn worker(
             break;
         }
         let is_final = chunk.is_final;
+
+        // When drain flag is set, skip inference on buffered chunks.
+        // The full audio is saved to WAV for reconciliation.
+        if drain_flag.load(Ordering::Relaxed) {
+            if is_final {
+                info!("Streaming transcription drained (fast path)");
+                let _ = app_event_tx.send(AppEvent {
+                    source: AppEventSource::Transcriber,
+                    kind: AppEventKind::StreamingDrained,
+                });
+            }
+            continue;
+        }
+
         trace!("Transcriber received audio chunk");
         buffer.extend(resample_to_mono_16k(&chunk));
         let window_samples = (TARGET_SAMPLE_RATE as f32 * config.window_seconds) as usize;
