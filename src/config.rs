@@ -32,7 +32,6 @@ const DEFAULT_GLOBAL_HOTKEY: &str = "CmdOrCtrl+Shift+A";
 pub enum ConfigError {
     MissingHome,
     InvalidLogLevel(String),
-    MissingApiKey,
     EmptyAgentPrompts,
     EmptyAgentPromptName,
     EmptyAgentPromptInstruction,
@@ -45,7 +44,6 @@ impl std::fmt::Display for ConfigError {
         match self {
             ConfigError::MissingHome => write!(f, "HOME is not set"),
             ConfigError::InvalidLogLevel(value) => write!(f, "invalid log_level: {value}"),
-            ConfigError::MissingApiKey => write!(f, "open_api_key is missing"),
             ConfigError::EmptyAgentPrompts => write!(f, "agent_prompts cannot be empty"),
             ConfigError::EmptyAgentPromptName => write!(f, "agent_prompt name cannot be empty"),
             ConfigError::EmptyAgentPromptInstruction => {
@@ -258,9 +256,6 @@ fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
         .unwrap_or_else(|| logger::LogConfig::default().path);
 
     let open_api_key = partial.open_api_key.unwrap_or_default();
-    if open_api_key.trim().is_empty() {
-        return Err(ConfigError::MissingApiKey);
-    }
 
     let agent_prompts = partial.agent_prompts.unwrap_or_default();
     if agent_prompts.is_empty() {
@@ -331,13 +326,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_api_key() {
+    fn builds_config_without_api_key() {
         let mut partial = valid_partial();
-        partial.open_api_key = Some("   ".to_string());
-        assert!(matches!(
-            from_partial(partial),
-            Err(ConfigError::MissingApiKey)
-        ));
+        partial.open_api_key = None;
+        let cfg = from_partial(partial).expect("config should load without API key");
+        assert!(cfg.open_api_key.is_empty());
     }
 
     #[test]
