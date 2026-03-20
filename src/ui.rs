@@ -1517,7 +1517,7 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
 
     let hotkey_card = column![
         text("Keyboard Shortcut").size(15).color(TEXT_COLOR),
-        column![text("Global Hotkey").size(11).color(MUTED), hotkey_btn].spacing(4),
+        column![text("Quick Launch").size(11).color(MUTED), hotkey_btn].spacing(4),
     ]
     .spacing(10)
     .padding(14);
