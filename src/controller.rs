@@ -100,7 +100,6 @@ impl Controller {
             agent_prompts: snapshot.agent_prompts,
             default_prompt: snapshot.default_prompt,
             transcriber: snapshot.transcriber,
-            input_devices: Recorder::list_input_devices(),
             selected_input_device: snapshot.input_device,
             global_hotkey: snapshot.global_hotkey,
         });

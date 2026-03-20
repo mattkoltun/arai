@@ -448,7 +448,6 @@ impl Ui {
                     snapshot_prompts: Vec::new(),
                     snapshot_default: 0,
                     snapshot_transcriber: None,
-                    snapshot_input_devices: Vec::new(),
                     snapshot_selected_input_device: None,
                     snapshot_global_hotkey: String::new(),
                 },
@@ -501,7 +500,6 @@ struct UiRuntime {
     snapshot_prompts: Vec<AgentPrompt>,
     snapshot_default: usize,
     snapshot_transcriber: Option<TranscriberConfig>,
-    snapshot_input_devices: Vec<String>,
     snapshot_selected_input_device: Option<String>,
     snapshot_global_hotkey: String,
 }
@@ -634,14 +632,12 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     agent_prompts,
                     default_prompt,
                     transcriber,
-                    input_devices,
                     selected_input_device,
                     global_hotkey,
                 } => {
                     state.snapshot_prompts = agent_prompts;
                     state.snapshot_default = default_prompt;
                     state.snapshot_transcriber = Some(transcriber);
-                    state.snapshot_input_devices = input_devices;
                     state.snapshot_selected_input_device = selected_input_device;
                     state.snapshot_global_hotkey = global_hotkey;
                 }
@@ -717,7 +713,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_window_seconds = tc.window_seconds.to_string();
             state.config_overlap_seconds = tc.overlap_seconds.to_string();
             state.config_silence_threshold = tc.silence_threshold.to_string();
-            state.config_input_devices = state.snapshot_input_devices.clone();
+            state.config_input_devices = crate::recorder::Recorder::list_input_devices();
             state.config_selected_input_device = state.snapshot_selected_input_device.clone();
             state.config_global_hotkey = state.snapshot_global_hotkey.clone();
             state.config_hotkey_listening = false;
@@ -1033,21 +1029,38 @@ fn iced_key_to_hotkey_string(
 static BLIP_WAV: &[u8] = include_bytes!("../assets/sounds/blip.wav");
 static LOGO_PNG: &[u8] = include_bytes!("../assets/images/logo.png");
 
+/// Path to the cached blip WAV file written to a temp location on first use.
+static BLIP_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Writes the embedded blip WAV to a temp file (once) and returns the path.
+fn blip_file_path() -> &'static std::path::Path {
+    BLIP_PATH.get_or_init(|| {
+        let path = std::env::temp_dir().join("arai-blip.wav");
+        if let Err(e) = std::fs::write(&path, BLIP_WAV) {
+            log::warn!("Failed to write blip sound to temp: {e}");
+        }
+        path
+    })
+}
+
 /// Plays the blip sound on a background thread so it doesn't block the UI.
+/// Uses platform audio commands to avoid pulling in a second cpal version
+/// and triggering extra macOS permission prompts.
 fn play_blip() {
-    std::thread::spawn(|| {
-        let Ok((_stream, handle)) = rodio::OutputStream::try_default() else {
-            log::warn!("Failed to open audio output for blip sound");
-            return;
-        };
-        let cursor = std::io::Cursor::new(BLIP_WAV);
-        let Ok(source) = rodio::Decoder::new(cursor) else {
-            log::warn!("Failed to decode blip sound");
-            return;
-        };
-        let sink = rodio::Sink::try_new(&handle).unwrap();
-        sink.append(source);
-        sink.sleep_until_end();
+    let path = blip_file_path().to_path_buf();
+    std::thread::spawn(move || {
+        #[cfg(target_os = "macos")]
+        let result = std::process::Command::new("afplay").arg(&path).output();
+        #[cfg(target_os = "linux")]
+        let result = std::process::Command::new("aplay").arg(&path).output();
+        #[cfg(target_os = "windows")]
+        let result = std::process::Command::new("powershell")
+            .args(["-c", &format!("(New-Object Media.SoundPlayer '{}').PlaySync()", path.display())])
+            .output();
+
+        if let Err(e) = result {
+            log::warn!("Failed to play blip sound: {e}");
+        }
     });
 }
 

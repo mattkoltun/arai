@@ -117,6 +117,12 @@ release_macos() {
     cp "$universal_bin" "$app_bundle/Contents/MacOS/$APP_NAME"
     echo "    -> $app_bundle (universal binary)"
 
+    # Ad-hoc sign the bundle so macOS can persist permission grants (microphone etc.)
+    echo ""
+    echo "==> Code signing .app bundle (ad-hoc)"
+    codesign --force --deep --sign - "$app_bundle"
+    echo "    -> Signed"
+
     # 4. Create .dmg
     echo ""
     echo "==> Creating .dmg installer"
