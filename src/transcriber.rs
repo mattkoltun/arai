@@ -118,51 +118,174 @@ fn worker(
             debug!("Transcriber stop flag set, exiting");
             break;
         }
+        let is_final = chunk.is_final;
         trace!("Transcriber received audio chunk");
         buffer.extend(resample_to_mono_16k(&chunk));
         let window_samples = (TARGET_SAMPLE_RATE as f32 * config.window_seconds) as usize;
         let overlap_samples = (TARGET_SAMPLE_RATE as f32 * config.overlap_seconds) as usize;
-        if buffer.len() >= window_samples || chunk.is_final {
+        if buffer.len() >= window_samples || is_final {
             let energy = rms_energy(&buffer);
             debug!(
                 "Energy gate: rms={:.6}, threshold={}, buffer_samples={}, is_final={}",
                 energy,
                 config.silence_threshold,
                 buffer.len(),
-                chunk.is_final
+                is_final
             );
             if energy < config.silence_threshold {
                 debug!("Audio below silence threshold, skipping transcription");
                 buffer.clear();
-                continue;
-            }
-            match transcribe_audio(&ctx, &buffer) {
-                Ok(text) => {
-                    if !text.is_empty() {
-                        debug!("Transcription result: {}", text);
+            } else {
+                match transcribe_audio(&ctx, &buffer) {
+                    Ok(text) => {
+                        if !text.is_empty() {
+                            debug!("Transcription result: {}", text);
+                            let _ = app_event_tx.send(AppEvent {
+                                source: AppEventSource::Transcriber,
+                                kind: AppEventKind::Transcription(text),
+                            });
+                        }
+                    }
+                    Err(err) => {
+                        error!("Transcription error: {err}");
                         let _ = app_event_tx.send(AppEvent {
                             source: AppEventSource::Transcriber,
-                            kind: AppEventKind::Transcription(text),
+                            kind: AppEventKind::Error(format!("Transcription error: {err}")),
                         });
                     }
                 }
-                Err(err) => {
-                    error!("Transcription error: {err}");
-                    let _ = app_event_tx.send(AppEvent {
-                        source: AppEventSource::Transcriber,
-                        kind: AppEventKind::Error(format!("Transcription error: {err}")),
-                    });
+
+                if is_final || overlap_samples == 0 || buffer.len() <= overlap_samples {
+                    buffer.clear();
+                } else {
+                    let start = buffer.len() - overlap_samples;
+                    buffer.drain(0..start);
                 }
             }
 
-            if chunk.is_final || overlap_samples == 0 || buffer.len() <= overlap_samples {
-                buffer.clear();
-            } else {
-                let start = buffer.len() - overlap_samples;
-                buffer.drain(0..start);
+            // Signal the controller that all buffered audio has been processed.
+            if is_final {
+                info!("Streaming transcription drained");
+                let _ = app_event_tx.send(AppEvent {
+                    source: AppEventSource::Transcriber,
+                    kind: AppEventKind::StreamingDrained,
+                });
             }
         }
     }
+}
+
+/// Transcribes an entire WAV file in one pass using Whisper. Reads the file,
+/// resamples to 16kHz mono, and runs full inference. This is used for
+/// reconciliation after a recording session to produce a clean transcript
+/// from the complete audio.
+pub fn transcribe_wav_file(model_path: &str, wav_path: &str) -> Result<String, String> {
+    let samples = read_wav_to_f32(wav_path).map_err(|e| format!("Failed to read WAV: {e}"))?;
+    if samples.is_empty() {
+        return Ok(String::new());
+    }
+    let energy = rms_energy(&samples);
+    if energy < 0.003 {
+        info!("Reconciliation: audio is silence (rms={energy:.6}), skipping");
+        return Ok(String::new());
+    }
+    info!(
+        "Reconciliation: transcribing {} samples ({:.1}s), rms={:.6}",
+        samples.len(),
+        samples.len() as f32 / TARGET_SAMPLE_RATE as f32,
+        energy,
+    );
+    let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+        .map_err(|e| format!("Failed to load model: {e}"))?;
+    transcribe_audio_full(&ctx, &samples).map_err(|e| format!("Transcription error: {e}"))
+}
+
+/// Reads a 16-bit PCM WAV file and returns mono f32 samples at 16kHz.
+fn read_wav_to_f32(path: &str) -> Result<Vec<f32>, String> {
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    if data.len() < 12 {
+        return Err("WAV file too short".to_string());
+    }
+    if &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+        return Err("Not a valid WAV file".to_string());
+    }
+
+    let mut channels: Option<u16> = None;
+    let mut sample_rate: Option<u32> = None;
+    let mut bits_per_sample: Option<u16> = None;
+    let mut pcm_data: Option<&[u8]> = None;
+
+    // Walk RIFF sub-chunks starting after the WAVE identifier.
+    let mut offset = 12;
+    while offset + 8 <= data.len() {
+        let chunk_id = &data[offset..offset + 4];
+        let chunk_size = u32::from_le_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]) as usize;
+        let chunk_start = offset + 8;
+        let chunk_end = (chunk_start + chunk_size).min(data.len());
+
+        if chunk_id == b"fmt " && chunk_end >= chunk_start + 16 {
+            let d = &data[chunk_start..chunk_end];
+            channels = Some(u16::from_le_bytes([d[2], d[3]]));
+            sample_rate = Some(u32::from_le_bytes([d[4], d[5], d[6], d[7]]));
+            bits_per_sample = Some(u16::from_le_bytes([d[14], d[15]]));
+        } else if chunk_id == b"data" {
+            pcm_data = Some(&data[chunk_start..chunk_end]);
+        }
+
+        offset = chunk_start + chunk_size;
+        // WAV chunks are word-aligned
+        if !chunk_size.is_multiple_of(2) {
+            offset += 1;
+        }
+    }
+
+    let channels = channels.ok_or("No fmt chunk found")?;
+    let sample_rate = sample_rate.ok_or("No fmt chunk found")?;
+    let bps = bits_per_sample.ok_or("No fmt chunk found")?;
+    let pcm_data = pcm_data.ok_or("No data chunk found")?;
+
+    if bps != 16 {
+        return Err(format!("Unsupported bits per sample: {bps}"));
+    }
+
+    let samples_i16: Vec<i16> = pcm_data
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        .collect();
+
+    let chunk = AudioChunk {
+        sample_rate,
+        channels,
+        samples: samples_i16,
+        is_final: true,
+    };
+    Ok(resample_to_mono_16k(&chunk))
+}
+
+/// Runs Whisper inference on a full recording. Unlike [`transcribe_audio`],
+/// this allows multiple segments and context carry-over for better accuracy
+/// on longer audio.
+fn transcribe_audio_full(ctx: &WhisperContext, audio: &[f32]) -> Result<String, WhisperError> {
+    let mut state = ctx.create_state()?;
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_language(Some("en"));
+    params.set_translate(false);
+    params.set_n_threads(num_cpus());
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    params.set_print_special(false);
+    params.set_suppress_blank(true);
+    params.set_suppress_nst(true);
+    params.set_temperature_inc(0.0);
+
+    state.full(params, audio)?;
+    collect_segments(&state)
 }
 
 /// Runs Whisper inference on a buffer of 16kHz mono f32 audio samples.

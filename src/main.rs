@@ -53,6 +53,7 @@ fn main() {
     let (controller, shutdown_handle) = controller::Controller::new(
         recorder,
         transcriber,
+        app_event_tx,
         app_event_rx,
         agent,
         app_state,

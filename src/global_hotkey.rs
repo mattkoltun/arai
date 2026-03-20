@@ -70,7 +70,10 @@ impl HotkeyHandle {
             return false;
         }
 
-        info!("Global hotkey changed: {} -> {}", self.hotkey_str, new_hotkey_str);
+        info!(
+            "Global hotkey changed: {} -> {}",
+            self.hotkey_str, new_hotkey_str
+        );
         self.hotkey_id = new_hotkey.id();
         self.hotkey_str = new_hotkey_str.to_string();
         true

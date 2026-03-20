@@ -1,7 +1,7 @@
 use crate::agent::Agent;
 use crate::app_state::AppStateHandle;
-use crate::channels::{AppEventReceiver, UiUpdateSender};
-use crate::messages::{AppEventKind, AppEventSource, UiUpdate};
+use crate::channels::{AppEventReceiver, AppEventSender, UiUpdateSender};
+use crate::messages::{AppEvent, AppEventKind, AppEventSource, UiUpdate};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
 use log::{debug, error, info};
@@ -26,6 +26,7 @@ impl ShutdownHandle {
 pub struct Controller {
     recorder: Recorder,
     transcriber: Transcriber,
+    app_event_tx: AppEventSender,
     app_event_rx: AppEventReceiver,
     agent: Agent,
     app_state: AppStateHandle,
@@ -39,6 +40,7 @@ impl Controller {
     pub fn new(
         recorder: Recorder,
         transcriber: Transcriber,
+        app_event_tx: AppEventSender,
         app_event_rx: AppEventReceiver,
         agent: Agent,
         app_state: AppStateHandle,
@@ -49,6 +51,7 @@ impl Controller {
         let controller = Self {
             recorder,
             transcriber,
+            app_event_tx,
             app_event_rx,
             agent,
             app_state,
@@ -103,6 +106,35 @@ impl Controller {
         }
     }
 
+    /// Spawns a background thread to reconcile the full recording.
+    fn start_reconciliation(&self, path: String) {
+        info!("Starting reconciliation from {path}");
+        let _ = self.ui_update_tx.send(UiUpdate::ReconciliationStarted);
+        let model_path = self.app_state.model_path();
+        let tx = self.app_event_tx.clone();
+        std::thread::spawn(move || {
+            let result = crate::transcriber::transcribe_wav_file(&model_path, &path);
+            match result {
+                Ok(text) => {
+                    let _ = tx.send(AppEvent {
+                        source: AppEventSource::Transcriber,
+                        kind: AppEventKind::ReconciliationComplete(text),
+                    });
+                }
+                Err(e) => {
+                    error!("Reconciliation failed: {e}");
+                    let _ = tx.send(AppEvent {
+                        source: AppEventSource::Transcriber,
+                        kind: AppEventKind::ReconciliationComplete(String::new()),
+                    });
+                }
+            }
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!("Failed to remove recording {path}: {e}");
+            }
+        });
+    }
+
     /// Sends a `ConfigSnapshot` to the UI so it has the current config state.
     fn send_config_snapshot(&self) {
         let snapshot = self.app_state.snapshot();
@@ -119,6 +151,14 @@ impl Controller {
     /// the associated [`ShutdownHandle`] signals shutdown.
     pub fn run(mut self) {
         let mut accumulated_transcription = String::new();
+        // Text that existed before the current recording session started.
+        let mut pre_recording_text = String::new();
+        let mut reconciling = false;
+        // Both conditions must be true before reconciliation can start:
+        // the streaming transcriber must finish its backlog AND the
+        // recorder must finish writing the WAV file.
+        let mut wav_path_ready: Option<String> = None;
+        let mut streaming_drained = false;
 
         // Send initial config snapshot so the UI has config before any changes.
         self.send_config_snapshot();
@@ -131,9 +171,16 @@ impl Controller {
             };
 
             match (event.source, event.kind) {
-                (AppEventSource::Recorder, AppEventKind::Stopped) => {
+                (AppEventSource::Recorder, AppEventKind::Stopped(wav_path)) => {
                     info!("Recorder stopped, joining handle");
                     self.recorder.join_handle();
+                    wav_path_ready = wav_path;
+                    if streaming_drained
+                        && let Some(path) = wav_path_ready.take()
+                    {
+                        reconciling = true;
+                        self.start_reconciliation(path);
+                    }
                 }
                 (AppEventSource::Recorder, AppEventKind::Error(message)) => {
                     error!("Recorder event: {message}");
@@ -145,7 +192,38 @@ impl Controller {
                 (AppEventSource::Transcriber, AppEventKind::Transcription(text)) => {
                     debug!("Controller received transcript");
                     Self::append_transcription(&mut accumulated_transcription, &text);
-                    let _ = self.ui_update_tx.send(UiUpdate::TranscriptionUpdated(
+                    if !reconciling {
+                        let _ = self.ui_update_tx.send(UiUpdate::TranscriptionUpdated(
+                            accumulated_transcription.clone(),
+                        ));
+                    }
+                }
+                (AppEventSource::Transcriber, AppEventKind::StreamingDrained) => {
+                    info!("Controller received streaming drained signal");
+                    streaming_drained = true;
+                    if let Some(path) = wav_path_ready.take() {
+                        reconciling = true;
+                        self.start_reconciliation(path);
+                    }
+                }
+                (AppEventSource::Transcriber, AppEventKind::ReconciliationComplete(text)) => {
+                    reconciling = false;
+                    info!("Reconciliation complete ({} chars)", text.len());
+                    if !text.is_empty() {
+                        // Reconciliation only covers audio from this session.
+                        // Prepend any text that existed before recording started.
+                        accumulated_transcription = if pre_recording_text.is_empty() {
+                            text
+                        } else {
+                            let mut combined = pre_recording_text.clone();
+                            if !combined.ends_with(' ') {
+                                combined.push(' ');
+                            }
+                            combined.push_str(&text);
+                            combined
+                        };
+                    }
+                    let _ = self.ui_update_tx.send(UiUpdate::ReconciliationComplete(
                         accumulated_transcription.clone(),
                     ));
                 }
@@ -157,7 +235,10 @@ impl Controller {
                     self.process_text(text);
                 }
                 (AppEventSource::Ui, AppEventKind::UiStartListening(text)) => {
+                    pre_recording_text = text.clone();
                     accumulated_transcription = text;
+                    streaming_drained = false;
+                    wav_path_ready = None;
                     self.start_listening();
                 }
                 (AppEventSource::Ui, AppEventKind::UiStopListening) => {
@@ -286,7 +367,10 @@ mod tests {
     #[test]
     fn strips_partial_tail_overlap() {
         assert_eq!(
-            strip_overlap("because I hope because the other", "because the other part was very annoying."),
+            strip_overlap(
+                "because I hope because the other",
+                "because the other part was very annoying."
+            ),
             "part was very annoying."
         );
     }
@@ -294,7 +378,10 @@ mod tests {
     #[test]
     fn strips_single_word_overlap() {
         assert_eq!(
-            strip_overlap("It's still kind of happening.", "happening. Some parts are still happening."),
+            strip_overlap(
+                "It's still kind of happening.",
+                "happening. Some parts are still happening."
+            ),
             "Some parts are still happening."
         );
     }

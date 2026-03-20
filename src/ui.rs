@@ -371,6 +371,8 @@ enum AppMode {
     #[default]
     Idle,
     Listening,
+    /// Recording stopped; reconciling full audio through Whisper.
+    Reconciling,
     Processing,
 }
 
@@ -547,14 +549,14 @@ impl UiRuntime {
     }
 
     fn toggle_listen(&mut self) {
-        if self.mode == AppMode::Processing {
+        if self.mode == AppMode::Processing || self.mode == AppMode::Reconciling {
             return;
         }
         if self.mode == AppMode::Listening {
             debug!("UI stopping listen");
             self.send_event(AppEventKind::UiStopListening);
-            self.mode = AppMode::Idle;
-            self.status_line = "Ready".to_string();
+            self.mode = AppMode::Reconciling;
+            self.status_line = "Reconciling...".to_string();
             play_blip();
         } else {
             debug!("UI starting listen");
@@ -590,8 +592,8 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 false
             };
 
-            // Advance pulse animation while processing (~2.4 Hz cycle at 16ms ticks).
-            if state.mode == AppMode::Processing {
+            // Advance pulse animation while processing or reconciling (~2.4 Hz cycle at 16ms ticks).
+            if matches!(state.mode, AppMode::Processing | AppMode::Reconciling) {
                 state.pulse_phase += 0.15;
             } else {
                 state.pulse_phase = 0.0;
@@ -650,6 +652,18 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     log::error!("Processing failed: {message}");
                     state.mode = AppMode::Idle;
                     state.status_line = "Error — try again".to_string();
+                }
+                UiUpdate::ReconciliationStarted => {
+                    state.mode = AppMode::Reconciling;
+                    state.status_line = "Reconciling...".to_string();
+                }
+                UiUpdate::ReconciliationComplete(text) => {
+                    if !text.is_empty() {
+                        state.input = text;
+                        state.editor = text_editor::Content::with_text(&state.input);
+                    }
+                    state.mode = AppMode::Idle;
+                    state.status_line = "Ready".to_string();
                 }
                 UiUpdate::ConfigSnapshot {
                     agent_prompts,
@@ -951,40 +965,40 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 return Task::none();
             }
             match key {
-            keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.shift() => {
-                update(state, Message::Copy)
-            }
-            keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                state.submit();
-                Task::none()
-            }
-            keyboard::Key::Character(ref c) if c.as_str() == "c" && modifiers.command() => {
-                update(state, Message::Copy)
-            }
-            keyboard::Key::Character(ref c)
-                if c.as_str() == "z" && modifiers.command() && modifiers.shift() =>
-            {
-                update(state, Message::Redo)
-            }
-            keyboard::Key::Character(ref c)
-                if c.as_str() == "z" && modifiers.command() && !modifiers.shift() =>
-            {
-                update(state, Message::Undo)
-            }
-            keyboard::Key::Character(ref c) if c.as_str() == "w" && modifiers.command() => {
-                hide_app();
-                Task::none()
-            }
-            keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                if state.config_hotkey_listening {
-                    state.config_hotkey_listening = false;
-                } else if state.config_open {
-                    state.config_open = false;
+                keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.shift() => {
+                    update(state, Message::Copy)
                 }
-                Task::none()
+                keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                    state.submit();
+                    Task::none()
+                }
+                keyboard::Key::Character(ref c) if c.as_str() == "c" && modifiers.command() => {
+                    update(state, Message::Copy)
+                }
+                keyboard::Key::Character(ref c)
+                    if c.as_str() == "z" && modifiers.command() && modifiers.shift() =>
+                {
+                    update(state, Message::Redo)
+                }
+                keyboard::Key::Character(ref c)
+                    if c.as_str() == "z" && modifiers.command() && !modifiers.shift() =>
+                {
+                    update(state, Message::Undo)
+                }
+                keyboard::Key::Character(ref c) if c.as_str() == "w" && modifiers.command() => {
+                    hide_app();
+                    Task::none()
+                }
+                keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                    if state.config_hotkey_listening {
+                        state.config_hotkey_listening = false;
+                    } else if state.config_open {
+                        state.config_open = false;
+                    }
+                    Task::none()
+                }
+                _ => Task::none(),
             }
-            _ => Task::none(),
-        }
         }
     }
 }
@@ -1085,7 +1099,13 @@ fn play_blip() {
         let result = std::process::Command::new("aplay").arg(&path).output();
         #[cfg(target_os = "windows")]
         let result = std::process::Command::new("powershell")
-            .args(["-c", &format!("(New-Object Media.SoundPlayer '{}').PlaySync()", path.display())])
+            .args([
+                "-c",
+                &format!(
+                    "(New-Object Media.SoundPlayer '{}').PlaySync()",
+                    path.display()
+                ),
+            ])
             .output();
 
         if let Err(e) = result {
@@ -1109,10 +1129,7 @@ fn load_window_icon() -> Option<window::Icon> {
 fn restore_cursor(content: &mut text_editor::Content, line: usize, col: usize) {
     let line_count = content.line_count();
     let target_line = line.min(line_count.saturating_sub(1));
-    let line_len = content
-        .line(target_line)
-        .map(|l| l.text.len())
-        .unwrap_or(0);
+    let line_len = content.line(target_line).map(|l| l.text.len()).unwrap_or(0);
     let target_col = col.min(line_len);
     for _ in 0..target_line {
         content.perform(text_editor::Action::Move(text_editor::Motion::Down));
@@ -1146,11 +1163,13 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
     } else {
         let listening = state.mode == AppMode::Listening;
         let processing = state.mode == AppMode::Processing;
+        let reconciling = state.mode == AppMode::Reconciling;
 
         view_main(
             state,
             listening,
             processing,
+            reconciling,
             !state.input.trim().is_empty(),
             state.input.chars().count(),
         )
@@ -1165,6 +1184,7 @@ fn view_main<'a>(
     state: &'a UiRuntime,
     listening: bool,
     processing: bool,
+    reconciling: bool,
     has_text: bool,
     char_count: usize,
 ) -> Element<'a, Message> {
@@ -1184,36 +1204,27 @@ fn view_main<'a>(
         .wrapping(text::Wrapping::Word)
         .padding(16)
         .height(Fill)
-        .key_binding(|key_press| {
-            match &key_press.key {
-                keyboard::Key::Named(keyboard::key::Named::Enter)
-                    if key_press.modifiers.shift() =>
-                {
-                    Some(text_editor::Binding::Custom(Message::Copy))
-                }
-                keyboard::Key::Named(keyboard::key::Named::Enter)
-                    if key_press.modifiers.is_empty() =>
-                {
-                    Some(text_editor::Binding::Custom(Message::Submit))
-                }
-                keyboard::Key::Character(c)
-                    if c.as_str() == "z" && key_press.modifiers.command() =>
-                {
-                    if key_press.modifiers.shift() {
-                        Some(text_editor::Binding::Custom(Message::Redo))
-                    } else {
-                        Some(text_editor::Binding::Custom(Message::Undo))
-                    }
-                }
-                keyboard::Key::Character(c)
-                    if c.as_str() == "c" && key_press.modifiers.command() =>
-                {
-                    Some(text_editor::Binding::Custom(Message::Copy))
-                }
-                _ => text_editor::Binding::from_key_press(key_press),
+        .key_binding(|key_press| match &key_press.key {
+            keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.shift() => {
+                Some(text_editor::Binding::Custom(Message::Copy))
             }
+            keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.is_empty() => {
+                Some(text_editor::Binding::Custom(Message::Submit))
+            }
+            keyboard::Key::Character(c) if c.as_str() == "z" && key_press.modifiers.command() => {
+                if key_press.modifiers.shift() {
+                    Some(text_editor::Binding::Custom(Message::Redo))
+                } else {
+                    Some(text_editor::Binding::Custom(Message::Undo))
+                }
+            }
+            keyboard::Key::Character(c) if c.as_str() == "c" && key_press.modifiers.command() => {
+                Some(text_editor::Binding::Custom(Message::Copy))
+            }
+            _ => text_editor::Binding::from_key_press(key_press),
         });
-    if !listening && !processing {
+    let busy = listening || processing || reconciling;
+    if !busy {
         editor_widget = editor_widget.on_action(Message::EditorAction);
     }
 
@@ -1224,7 +1235,18 @@ fn view_main<'a>(
         button(icon('\u{E02B}', 22.0))
             .style(icon_btn_active)
             .padding([8, 12])
-            .on_press_maybe((!processing).then_some(Message::ToggleListen))
+            .on_press(Message::ToggleListen)
+    } else if reconciling {
+        // Pulsate mic icon green while reconciling.
+        let t = state.pulse_phase.sin() * 0.5 + 0.5;
+        let pulse_color = Color::from_rgb(
+            0.651 * t + 0.25 * (1.0 - t),
+            0.886 * t + 0.35 * (1.0 - t),
+            0.180 * t + 0.10 * (1.0 - t),
+        );
+        button(icon('\u{E029}', 22.0).color(pulse_color))
+            .style(icon_btn)
+            .padding([8, 12])
     } else {
         button(icon('\u{E029}', 22.0))
             .style(icon_btn)
@@ -1248,20 +1270,20 @@ fn view_main<'a>(
         button(icon('\u{E163}', 22.0))
             .style(icon_btn)
             .padding([8, 12])
-            .on_press_maybe((!listening && has_text).then_some(Message::Submit))
+            .on_press_maybe((!busy && has_text).then_some(Message::Submit))
     };
 
     // copy: E14D
     let copy_btn = button(icon('\u{E14D}', 22.0))
         .style(icon_btn)
         .padding([8, 12])
-        .on_press_maybe((has_text && !processing && !listening).then_some(Message::Copy));
+        .on_press_maybe((has_text && !busy).then_some(Message::Copy));
 
     // settings: E8B8
     let settings_btn = button(icon('\u{E8B8}', 22.0))
         .style(icon_btn)
         .padding([8, 12])
-        .on_press_maybe((!listening && !processing).then_some(Message::OpenConfig));
+        .on_press_maybe((!busy).then_some(Message::OpenConfig));
 
     let button_group = row![mic_btn, send_btn, copy_btn, settings_btn]
         .spacing(16)
@@ -1451,11 +1473,11 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
         sf.global_hotkey.clone()
     };
 
-    let hotkey_btn = button(
-        text(hotkey_display)
-            .size(13)
-            .color(if sf.hotkey_listening { PINK } else { TEXT_COLOR }),
-    )
+    let hotkey_btn = button(text(hotkey_display).size(13).color(if sf.hotkey_listening {
+        PINK
+    } else {
+        TEXT_COLOR
+    }))
     .style(if sf.hotkey_listening {
         hotkey_input_active
     } else {
@@ -1467,20 +1489,14 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
 
     let hotkey_card = column![
         text("Keyboard Shortcut").size(15).color(TEXT_COLOR),
-        column![
-            text("Global Hotkey").size(11).color(MUTED),
-            hotkey_btn
-        ]
-        .spacing(4),
+        column![text("Global Hotkey").size(11).color(MUTED), hotkey_btn].spacing(4),
     ]
     .spacing(10)
     .padding(14);
 
     column![
         container(mic_card).style(surface_container).width(Fill),
-        container(hotkey_card)
-            .style(surface_container)
-            .width(Fill),
+        container(hotkey_card).style(surface_container).width(Fill),
         container(transcriber_card)
             .style(surface_container)
             .width(Fill),
@@ -1578,9 +1594,9 @@ fn subscription(state: &UiRuntime) -> Subscription<Message> {
     Subscription::batch([
         time::every(Duration::from_millis(16)).map(|_| Message::Tick),
         keyboard::listen().map(|event| match event {
-            keyboard::Event::KeyPressed {
-                key, modifiers, ..
-            } => Message::KeyPressed(key, modifiers),
+            keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                Message::KeyPressed(key, modifiers)
+            }
             _ => Message::Tick,
         }),
         window::open_events().map(Message::WindowOpened),
@@ -1600,27 +1616,30 @@ fn ui_update_stream(
     bridge: &UiUpdateBridge,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = Message> + Send>> {
     let rx = bridge.0.clone();
-    Box::pin(iced::stream::channel(100, move |mut sender: futures::channel::mpsc::Sender<Message>| async move {
-        let rx = {
-            let mut guard = rx.lock().unwrap();
-            guard.take()
-        };
-        if let Some(rx) = rx {
-            std::thread::spawn(move || {
-                while let Ok(update) = rx.recv() {
-                    if futures::executor::block_on(
-                        sender.send(Message::UiUpdateReceived(update)),
-                    )
-                    .is_err()
-                    {
-                        log::warn!("UI channel closed, bridge exiting");
-                        break;
+    Box::pin(iced::stream::channel(
+        100,
+        move |mut sender: futures::channel::mpsc::Sender<Message>| async move {
+            let rx = {
+                let mut guard = rx.lock().unwrap();
+                guard.take()
+            };
+            if let Some(rx) = rx {
+                std::thread::spawn(move || {
+                    while let Ok(update) = rx.recv() {
+                        if futures::executor::block_on(
+                            sender.send(Message::UiUpdateReceived(update)),
+                        )
+                        .is_err()
+                        {
+                            log::warn!("UI channel closed, bridge exiting");
+                            break;
+                        }
                     }
-                }
-            });
-        }
-        std::future::pending::<()>().await;
-    }))
+                });
+            }
+            std::future::pending::<()>().await;
+        },
+    ))
 }
 
 fn theme(_state: &UiRuntime) -> Theme {

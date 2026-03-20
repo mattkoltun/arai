@@ -93,6 +93,12 @@ impl AppState {
         }
     }
 
+    /// Returns the path to the Whisper model file.
+    pub fn model_path(&self) -> String {
+        let inner = self.inner.lock().expect("app_state mutex poisoned");
+        inner.transcriber.model_path.clone()
+    }
+
     pub fn agent_instruction(&self) -> String {
         let inner = self.inner.lock().expect("app_state mutex poisoned");
         inner

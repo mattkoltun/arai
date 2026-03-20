@@ -18,6 +18,10 @@ pub enum UiUpdate {
     AgentResponseReceived(String),
     /// Agent processing failed — contains the error message.
     ProcessingFailed(String),
+    /// Recording stopped, reconciliation pass is starting.
+    ReconciliationStarted,
+    /// Reconciliation finished — full transcription from the complete recording.
+    ReconciliationComplete(String),
     /// Snapshot of config state (prompts, transcriber settings).
     ConfigSnapshot {
         agent_prompts: Vec<AgentPrompt>,
@@ -38,9 +42,14 @@ pub enum AppEventSource {
 
 #[derive(Clone, Debug)]
 pub enum AppEventKind {
-    Stopped,
+    /// Recorder stopped; optionally carries the path to the saved WAV file.
+    Stopped(Option<String>),
     Error(String),
     Transcription(String),
+    /// Streaming transcriber finished processing all buffered audio chunks.
+    StreamingDrained,
+    /// Full-file reconciliation transcription completed.
+    ReconciliationComplete(String),
     UiStartListening(String),
     UiStopListening,
     UiSubmitText(String),
