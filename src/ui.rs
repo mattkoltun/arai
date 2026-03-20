@@ -808,7 +808,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::KeyPressed(key, modifiers) => match key {
-            keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.command() => {
+            keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.shift() => {
+                update(state, Message::Copy)
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
                 state.submit();
                 Task::none()
             }
@@ -915,19 +918,32 @@ fn view_main<'a>(
         .padding(16)
         .height(Fill)
         .key_binding(|key_press| {
-            let keyboard::Key::Character(c) = &key_press.key else {
-                return text_editor::Binding::from_key_press(key_press);
-            };
-            if c.as_str() == "z" && key_press.modifiers.command() {
-                if key_press.modifiers.shift() {
-                    Some(text_editor::Binding::Custom(Message::Redo))
-                } else {
-                    Some(text_editor::Binding::Custom(Message::Undo))
+            match &key_press.key {
+                keyboard::Key::Named(keyboard::key::Named::Enter)
+                    if key_press.modifiers.shift() =>
+                {
+                    Some(text_editor::Binding::Custom(Message::Copy))
                 }
-            } else if c.as_str() == "c" && key_press.modifiers.command() {
-                Some(text_editor::Binding::Custom(Message::Copy))
-            } else {
-                text_editor::Binding::from_key_press(key_press)
+                keyboard::Key::Named(keyboard::key::Named::Enter)
+                    if key_press.modifiers.is_empty() =>
+                {
+                    Some(text_editor::Binding::Custom(Message::Submit))
+                }
+                keyboard::Key::Character(c)
+                    if c.as_str() == "z" && key_press.modifiers.command() =>
+                {
+                    if key_press.modifiers.shift() {
+                        Some(text_editor::Binding::Custom(Message::Redo))
+                    } else {
+                        Some(text_editor::Binding::Custom(Message::Undo))
+                    }
+                }
+                keyboard::Key::Character(c)
+                    if c.as_str() == "c" && key_press.modifiers.command() =>
+                {
+                    Some(text_editor::Binding::Custom(Message::Copy))
+                }
+                _ => text_editor::Binding::from_key_press(key_press),
             }
         });
     if !listening && !processing {
