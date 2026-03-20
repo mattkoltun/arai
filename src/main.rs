@@ -6,6 +6,7 @@ mod controller;
 mod global_hotkey;
 mod logger;
 mod messages;
+mod model_downloader;
 mod recorder;
 mod transcriber;
 mod ui;
