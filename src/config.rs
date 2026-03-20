@@ -2,10 +2,27 @@ use crate::logger;
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 const DEFAULT_AGENT_PROMPT: &str =
     "Rewrite the user text for clarity and brevity while preserving meaning.";
-const DEFAULT_MODEL_PATH: &str = "models/ggml-small.en.bin";
+
+/// Returns the platform-standard directory for storing Whisper models.
+/// - macOS: `~/Library/Application Support/arai/models/`
+/// - Linux: `~/.local/share/arai/models/`
+pub fn default_model_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("arai")
+        .join("models")
+}
+
+static DEFAULT_MODEL_PATH: LazyLock<String> = LazyLock::new(|| {
+    default_model_dir()
+        .join("ggml-small.en.bin")
+        .display()
+        .to_string()
+});
 const DEFAULT_WINDOW_SECONDS: f32 = 3.0;
 const DEFAULT_OVERLAP_SECONDS: f32 = 0.25;
 const DEFAULT_SILENCE_THRESHOLD: f32 = 0.005;
@@ -133,7 +150,7 @@ fn default_true() -> bool {
 impl Default for TranscriberConfig {
     fn default() -> Self {
         Self {
-            model_path: DEFAULT_MODEL_PATH.to_string(),
+            model_path: DEFAULT_MODEL_PATH.clone(),
             window_seconds: DEFAULT_WINDOW_SECONDS,
             overlap_seconds: DEFAULT_OVERLAP_SECONDS,
             silence_threshold: DEFAULT_SILENCE_THRESHOLD,
@@ -344,5 +361,23 @@ mod tests {
             from_partial(bad_instruction),
             Err(ConfigError::EmptyAgentPromptInstruction)
         ));
+    }
+
+    #[test]
+    fn default_model_dir_ends_with_arai_models() {
+        let dir = default_model_dir();
+        assert!(
+            dir.ends_with("arai/models"),
+            "expected path ending with arai/models, got: {dir:?}"
+        );
+    }
+
+    #[test]
+    fn default_model_path_is_absolute() {
+        let path = std::path::Path::new(DEFAULT_MODEL_PATH.as_str());
+        assert!(
+            path.is_absolute(),
+            "DEFAULT_MODEL_PATH should be absolute, got: {path:?}"
+        );
     }
 }
