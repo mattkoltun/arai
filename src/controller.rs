@@ -84,13 +84,23 @@ impl Controller {
         self.agent.submit(instruction, text);
     }
 
-    /// Appends a transcription chunk to the accumulated text, adding a space
-    /// separator when needed.
+    /// Appends a transcription chunk to the accumulated text, deduplicating
+    /// any overlapping suffix/prefix caused by the transcriber's sliding window.
     fn append_transcription(accumulated: &mut String, text: &str) {
-        if !accumulated.is_empty() && !accumulated.ends_with(' ') {
-            accumulated.push(' ');
+        if accumulated.is_empty() {
+            accumulated.push_str(text);
+            return;
         }
-        accumulated.push_str(text);
+
+        // Find the longest suffix of `accumulated` that matches a prefix of
+        // `text` (case-insensitive, word-boundary aligned) and skip it.
+        let new_text = strip_overlap(accumulated, text);
+        if !new_text.is_empty() {
+            if !accumulated.ends_with(' ') {
+                accumulated.push(' ');
+            }
+            accumulated.push_str(new_text);
+        }
     }
 
     /// Sends a `ConfigSnapshot` to the UI so it has the current config state.
@@ -201,5 +211,101 @@ impl Controller {
         recorder.stop();
         drop(recorder);
         drop(transcriber);
+    }
+}
+
+/// Returns the portion of `new_text` that doesn't overlap with the tail of
+/// `existing`. Compares word sequences case-insensitively to handle slight
+/// Whisper variations. If no overlap is found, returns the full `new_text`.
+fn strip_overlap<'a>(existing: &str, new_text: &'a str) -> &'a str {
+    let existing_words: Vec<&str> = existing.split_whitespace().collect();
+    let new_words: Vec<&str> = new_text.split_whitespace().collect();
+
+    if existing_words.is_empty() || new_words.is_empty() {
+        return new_text;
+    }
+
+    // Try matching progressively longer prefixes of new_words against the
+    // tail of existing_words. Find the longest overlap.
+    let max_check = existing_words.len().min(new_words.len());
+    let mut best_overlap = 0;
+
+    for overlap_len in 1..=max_check {
+        let existing_tail = &existing_words[existing_words.len() - overlap_len..];
+        let new_prefix = &new_words[..overlap_len];
+
+        if existing_tail
+            .iter()
+            .zip(new_prefix.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            best_overlap = overlap_len;
+        }
+    }
+
+    if best_overlap == 0 {
+        return new_text;
+    }
+
+    // Find the byte offset in new_text after skipping `best_overlap` words.
+    let mut offset = 0;
+    for _ in 0..best_overlap {
+        // Skip whitespace
+        while offset < new_text.len() && new_text.as_bytes()[offset].is_ascii_whitespace() {
+            offset += 1;
+        }
+        // Skip word
+        while offset < new_text.len() && !new_text.as_bytes()[offset].is_ascii_whitespace() {
+            offset += 1;
+        }
+    }
+    // Skip leading whitespace of remainder
+    while offset < new_text.len() && new_text.as_bytes()[offset].is_ascii_whitespace() {
+        offset += 1;
+    }
+    &new_text[offset..]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_overlap_appends_full_text() {
+        assert_eq!(strip_overlap("hello world", "foo bar"), "foo bar");
+    }
+
+    #[test]
+    fn strips_simple_overlap() {
+        assert_eq!(
+            strip_overlap("interesting to see.", "interesting to see. because I hope"),
+            "because I hope"
+        );
+    }
+
+    #[test]
+    fn strips_partial_tail_overlap() {
+        assert_eq!(
+            strip_overlap("because I hope because the other", "because the other part was very annoying."),
+            "part was very annoying."
+        );
+    }
+
+    #[test]
+    fn strips_single_word_overlap() {
+        assert_eq!(
+            strip_overlap("It's still kind of happening.", "happening. Some parts are still happening."),
+            "Some parts are still happening."
+        );
+    }
+
+    #[test]
+    fn empty_existing_returns_full_text() {
+        assert_eq!(strip_overlap("", "new text"), "new text");
+    }
+
+    #[test]
+    fn full_overlap_returns_empty() {
+        assert_eq!(strip_overlap("hello world", "hello world"), "");
     }
 }

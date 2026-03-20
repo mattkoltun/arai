@@ -611,8 +611,30 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             match update {
                 UiUpdate::TranscriptionUpdated(text) => {
                     if state.mode == AppMode::Listening && state.input != text {
+                        // Append only the new portion to the editor instead of
+                        // recreating it, which avoids cursor resets and dropped
+                        // updates from rapid Content::with_text() calls.
+                        let delta = if text.starts_with(&state.input) {
+                            &text[state.input.len()..]
+                        } else {
+                            // Full text diverged (e.g. after user edit) — replace.
+                            state.editor = text_editor::Content::with_text(&text);
+                            state.input = text;
+                            state.status_line = "Listening...".to_string();
+                            return Task::none();
+                        };
+                        if !delta.is_empty() {
+                            // Move cursor to end, then insert the delta.
+                            state.editor.perform(text_editor::Action::Move(
+                                text_editor::Motion::DocumentEnd,
+                            ));
+                            for ch in delta.chars() {
+                                state.editor.perform(text_editor::Action::Edit(
+                                    text_editor::Edit::Insert(ch),
+                                ));
+                            }
+                        }
                         state.input = text;
-                        state.editor = text_editor::Content::with_text(&state.input);
                         state.status_line = "Listening...".to_string();
                     }
                 }
