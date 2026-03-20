@@ -7,6 +7,7 @@ use iced::font::Family;
 use iced::theme::Palette;
 use iced::widget::{
     Column, button, column, container, pick_list, row, scrollable, text, text_editor, text_input,
+    toggler,
 };
 use iced::{
     Background, Border, Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme,
@@ -446,6 +447,9 @@ impl Ui {
                     config_selected_input_device: None,
                     config_global_hotkey: String::new(),
                     config_hotkey_listening: false,
+                    config_use_gpu: true,
+                    config_flash_attn: true,
+                    config_no_timestamps: true,
                     config_tab: ConfigTab::default(),
                     snapshot_prompts: Vec::new(),
                     snapshot_default: 0,
@@ -498,6 +502,9 @@ struct UiRuntime {
     config_selected_input_device: Option<String>,
     config_global_hotkey: String,
     config_hotkey_listening: bool,
+    config_use_gpu: bool,
+    config_flash_attn: bool,
+    config_no_timestamps: bool,
     config_tab: ConfigTab,
     snapshot_prompts: Vec<AgentPrompt>,
     snapshot_default: usize,
@@ -533,6 +540,9 @@ enum Message {
     HotkeyCaptured(String),
     Undo,
     Redo,
+    UseGpuToggled(bool),
+    FlashAttnToggled(bool),
+    NoTimestampsToggled(bool),
     SwitchConfigTab(ConfigTab),
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
@@ -750,6 +760,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_window_seconds = tc.window_seconds.to_string();
             state.config_overlap_seconds = tc.overlap_seconds.to_string();
             state.config_silence_threshold = tc.silence_threshold.to_string();
+            state.config_use_gpu = tc.use_gpu;
+            state.config_flash_attn = tc.flash_attn;
+            state.config_no_timestamps = tc.no_timestamps;
             state.config_input_devices = crate::recorder::Recorder::list_input_devices();
             state.config_selected_input_device = state.snapshot_selected_input_device.clone();
             state.config_global_hotkey = state.snapshot_global_hotkey.clone();
@@ -817,6 +830,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 window_seconds: window,
                 overlap_seconds: overlap,
                 silence_threshold: silence,
+                use_gpu: state.config_use_gpu,
+                flash_attn: state.config_flash_attn,
+                no_timestamps: state.config_no_timestamps,
             }));
 
             state.send_event(AppEventKind::UiUpdateInputDevice(
@@ -922,6 +938,18 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::InputDeviceSelected(value) => {
             state.config_selected_input_device = Some(value);
+            Task::none()
+        }
+        Message::UseGpuToggled(value) => {
+            state.config_use_gpu = value;
+            Task::none()
+        }
+        Message::FlashAttnToggled(value) => {
+            state.config_flash_attn = value;
+            Task::none()
+        }
+        Message::NoTimestampsToggled(value) => {
+            state.config_no_timestamps = value;
             Task::none()
         }
         Message::StartHotkeyCapture => {
@@ -1369,7 +1397,7 @@ fn view_config<'a>(
     let tab_content = match config_tab {
         ConfigTab::Setup => view_setup_tab(&sf),
         ConfigTab::Instructions => view_instructions_tab(state, &prompts, config_default),
-        ConfigTab::Advanced => view_advanced_tab(),
+        ConfigTab::Advanced => view_advanced_tab(state),
     };
 
     let save_btn = button(text("Save").size(13))
@@ -1583,8 +1611,56 @@ fn view_instructions_tab<'a>(
     column![prompts_column].spacing(12).padding(14)
 }
 
-fn view_advanced_tab() -> Column<'static, Message> {
-    column![text("More settings coming soon.").size(13).color(MUTED)]
+fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
+    let gpu_toggle = toggler(state.config_use_gpu)
+        .label("GPU Acceleration")
+        .on_toggle(Message::UseGpuToggled)
+        .text_size(13)
+        .spacing(10)
+        .size(20);
+
+    let flash_attn_toggle = toggler(state.config_flash_attn)
+        .label("Flash Attention")
+        .on_toggle(Message::FlashAttnToggled)
+        .text_size(13)
+        .spacing(10)
+        .size(20);
+
+    let no_timestamps_toggle = toggler(state.config_no_timestamps)
+        .label("Disable Timestamps")
+        .on_toggle(Message::NoTimestampsToggled)
+        .text_size(13)
+        .spacing(10)
+        .size(20);
+
+    let gpu_card = column![
+        text("Model Inference").size(15).color(TEXT_COLOR),
+        column![
+            text("Enable Metal GPU for faster inference on Apple Silicon.")
+                .size(11)
+                .color(MUTED),
+            gpu_toggle,
+        ]
+        .spacing(6),
+        column![
+            text("Use flash attention for reduced memory and faster decoding.")
+                .size(11)
+                .color(MUTED),
+            flash_attn_toggle,
+        ]
+        .spacing(6),
+        column![
+            text("Skip timestamp computation for faster output.")
+                .size(11)
+                .color(MUTED),
+            no_timestamps_toggle,
+        ]
+        .spacing(6),
+    ]
+    .spacing(12)
+    .padding(14);
+
+    column![container(gpu_card).style(surface_container).width(Fill)]
         .spacing(12)
         .padding(14)
 }

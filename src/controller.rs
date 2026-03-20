@@ -114,10 +114,10 @@ impl Controller {
     fn start_reconciliation(&self, path: String) {
         info!("Starting reconciliation from {path}");
         let _ = self.ui_update_tx.send(UiUpdate::ReconciliationStarted);
-        let model_path = self.app_state.model_path();
+        let transcriber_config = self.app_state.transcriber_config();
         let tx = self.app_event_tx.clone();
         std::thread::spawn(move || {
-            let result = crate::transcriber::transcribe_wav_file(&model_path, &path);
+            let result = crate::transcriber::transcribe_wav_file(&transcriber_config, &path);
             match result {
                 Ok(text) => {
                     let _ = tx.send(AppEvent {

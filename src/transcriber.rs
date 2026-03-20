@@ -104,11 +104,11 @@ impl Drop for Transcriber {
     }
 }
 
-/// Returns context parameters with GPU and flash attention enabled.
-fn gpu_context_params() -> WhisperContextParameters<'static> {
+/// Returns context parameters configured from the transcriber config.
+fn context_params(config: &TranscriberConfig) -> WhisperContextParameters<'static> {
     let mut params = WhisperContextParameters::default();
-    params.use_gpu(true);
-    params.flash_attn(true);
+    params.use_gpu(config.use_gpu);
+    params.flash_attn(config.flash_attn);
     params
 }
 
@@ -123,7 +123,7 @@ fn worker(
     stop_flag: Arc<AtomicBool>,
     drain_flag: Arc<AtomicBool>,
 ) {
-    let ctx = match WhisperContext::new_with_params(&config.model_path, gpu_context_params()) {
+    let ctx = match WhisperContext::new_with_params(&config.model_path, context_params(&config)) {
         Ok(c) => c,
         Err(err) => {
             error!("Failed to load model: {err}");
@@ -174,7 +174,7 @@ fn worker(
                 debug!("Audio below silence threshold, skipping transcription");
                 buffer.clear();
             } else {
-                match transcribe_audio(&ctx, &buffer) {
+                match transcribe_audio(&ctx, &buffer, config.no_timestamps) {
                     Ok(text) => {
                         if !text.is_empty() {
                             debug!("Transcription result: {}", text);
@@ -217,7 +217,7 @@ fn worker(
 /// resamples to 16kHz mono, and runs full inference. This is used for
 /// reconciliation after a recording session to produce a clean transcript
 /// from the complete audio.
-pub fn transcribe_wav_file(model_path: &str, wav_path: &str) -> Result<String, String> {
+pub fn transcribe_wav_file(config: &TranscriberConfig, wav_path: &str) -> Result<String, String> {
     let samples = read_wav_to_f32(wav_path).map_err(|e| format!("Failed to read WAV: {e}"))?;
     if samples.is_empty() {
         return Ok(String::new());
@@ -233,9 +233,10 @@ pub fn transcribe_wav_file(model_path: &str, wav_path: &str) -> Result<String, S
         samples.len() as f32 / TARGET_SAMPLE_RATE as f32,
         energy,
     );
-    let ctx = WhisperContext::new_with_params(model_path, gpu_context_params())
+    let ctx = WhisperContext::new_with_params(&config.model_path, context_params(config))
         .map_err(|e| format!("Failed to load model: {e}"))?;
-    transcribe_audio_full(&ctx, &samples).map_err(|e| format!("Transcription error: {e}"))
+    transcribe_audio_full(&ctx, &samples, config.no_timestamps)
+        .map_err(|e| format!("Transcription error: {e}"))
 }
 
 /// Reads a 16-bit PCM WAV file and returns mono f32 samples at 16kHz.
@@ -308,13 +309,17 @@ fn read_wav_to_f32(path: &str) -> Result<Vec<f32>, String> {
 /// Runs Whisper inference on a full recording. Unlike [`transcribe_audio`],
 /// this allows multiple segments and context carry-over for better accuracy
 /// on longer audio.
-fn transcribe_audio_full(ctx: &WhisperContext, audio: &[f32]) -> Result<String, WhisperError> {
+fn transcribe_audio_full(
+    ctx: &WhisperContext,
+    audio: &[f32],
+    no_timestamps: bool,
+) -> Result<String, WhisperError> {
     let mut state = ctx.create_state()?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_language(Some("en"));
     params.set_translate(false);
     params.set_n_threads(num_cpus());
-    params.set_no_timestamps(true);
+    params.set_no_timestamps(no_timestamps);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
@@ -332,13 +337,17 @@ fn transcribe_audio_full(ctx: &WhisperContext, audio: &[f32]) -> Result<String, 
 /// `no_context` prevents decoder feedback loops, `single_segment` suits
 /// short streaming windows, and `temperature_inc(0.0)` disables fallback
 /// temperature increases that produce random output.
-fn transcribe_audio(ctx: &WhisperContext, audio: &[f32]) -> Result<String, WhisperError> {
+fn transcribe_audio(
+    ctx: &WhisperContext,
+    audio: &[f32],
+    no_timestamps: bool,
+) -> Result<String, WhisperError> {
     let mut state = ctx.create_state()?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_language(Some("en"));
     params.set_translate(false);
     params.set_n_threads(num_cpus());
-    params.set_no_timestamps(true);
+    params.set_no_timestamps(no_timestamps);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);

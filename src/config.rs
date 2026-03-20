@@ -114,10 +114,20 @@ pub struct TranscriberConfig {
     pub overlap_seconds: f32,
     #[serde(default = "default_silence_threshold")]
     pub silence_threshold: f32,
+    #[serde(default = "default_true")]
+    pub use_gpu: bool,
+    #[serde(default = "default_true")]
+    pub flash_attn: bool,
+    #[serde(default = "default_true")]
+    pub no_timestamps: bool,
 }
 
 fn default_silence_threshold() -> f32 {
     DEFAULT_SILENCE_THRESHOLD
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for TranscriberConfig {
@@ -127,6 +137,9 @@ impl Default for TranscriberConfig {
             window_seconds: DEFAULT_WINDOW_SECONDS,
             overlap_seconds: DEFAULT_OVERLAP_SECONDS,
             silence_threshold: DEFAULT_SILENCE_THRESHOLD,
+            use_gpu: true,
+            flash_attn: true,
+            no_timestamps: true,
         }
     }
 }
