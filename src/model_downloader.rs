@@ -9,7 +9,6 @@ use std::time::Instant;
 
 /// Available Whisper model variants.
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code)]
 pub struct WhisperModel {
     pub name: &'static str,
     pub file: &'static str,
@@ -17,7 +16,6 @@ pub struct WhisperModel {
     pub description: &'static str,
 }
 
-#[allow(dead_code)]
 pub const WHISPER_MODELS: &[WhisperModel] = &[
     WhisperModel {
         name: "Tiny (English)",
@@ -54,7 +52,6 @@ pub const WHISPER_MODELS: &[WhisperModel] = &[
 const HF_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
 /// Returns the full download URL for a model file.
-#[allow(dead_code)]
 fn download_url(file: &str) -> String {
     format!("{HF_BASE_URL}/{file}")
 }
@@ -63,7 +60,6 @@ fn download_url(file: &str) -> String {
 /// completion/failure events are sent via `app_event_tx`. Set `cancel_flag`
 /// to `true` from another thread to abort the download. The `.part` file is
 /// cleaned up on cancel.
-#[allow(dead_code)]
 pub fn start_download(
     model: &WhisperModel,
     app_event_tx: AppEventSender,
@@ -88,7 +84,6 @@ pub fn start_download(
     })
 }
 
-#[allow(dead_code)]
 fn run_download(
     file: &str,
     app_event_tx: &AppEventSender,

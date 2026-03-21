@@ -1149,6 +1149,13 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::WizardBack => {
             if state.wizard_from_settings {
+                if state.wizard_downloading {
+                    state
+                        .wizard_cancel_flag
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    state.wizard_downloading = false;
+                    state.wizard_download_progress = None;
+                }
                 state.phase = AppPhase::Main;
                 state.wizard_error = None;
                 state.wizard_from_settings = false;
