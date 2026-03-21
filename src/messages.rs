@@ -31,16 +31,12 @@ pub enum UiUpdate {
         global_hotkey: String,
     },
     /// Model download progress update for the wizard.
-    #[allow(dead_code)]
     ModelDownloadProgress(u64, u64),
     /// Model download completed — carries the saved model path.
-    #[allow(dead_code)]
     ModelDownloadComplete(std::path::PathBuf),
     /// Model download failed.
-    #[allow(dead_code)]
     ModelDownloadFailed(String),
     /// Model download was cancelled.
-    #[allow(dead_code)]
     ModelDownloadCancelled,
 }
 
@@ -79,16 +75,12 @@ pub enum AppEventKind {
     UiUpdateInputDevice(Option<String>),
     UiUpdateGlobalHotkey(String),
     /// Model download progress: (bytes_downloaded, total_bytes).
-    #[allow(dead_code)]
     ModelDownloadProgress(u64, u64),
     /// Model download completed successfully; carries the path to the downloaded file.
-    #[allow(dead_code)]
     ModelDownloadComplete(std::path::PathBuf),
     /// Model download failed with an error message.
-    #[allow(dead_code)]
     ModelDownloadFailed(String),
     /// Model download was cancelled by the user.
-    #[allow(dead_code)]
     ModelDownloadCancelled,
 }
 

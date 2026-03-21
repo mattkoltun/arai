@@ -305,6 +305,32 @@ impl Controller {
                     self.app_state.update_global_hotkey(hotkey);
                     self.send_config_snapshot();
                 }
+                (_, AppEventKind::ModelDownloadProgress(downloaded, total)) => {
+                    let _ = self
+                        .ui_update_tx
+                        .send(UiUpdate::ModelDownloadProgress(downloaded, total));
+                }
+                (_, AppEventKind::ModelDownloadComplete(path)) => {
+                    info!("Model download complete: {}", path.display());
+                    let path_str = path.display().to_string();
+                    self.app_state.update_transcriber(TranscriberConfig {
+                        model_path: path_str,
+                        ..self.app_state.transcriber_config()
+                    });
+                    self.restart_transcriber(self.app_state.transcriber_config());
+                    self.send_config_snapshot();
+                    let _ = self
+                        .ui_update_tx
+                        .send(UiUpdate::ModelDownloadComplete(path));
+                }
+                (_, AppEventKind::ModelDownloadFailed(err)) => {
+                    error!("Model download failed: {err}");
+                    let _ = self.ui_update_tx.send(UiUpdate::ModelDownloadFailed(err));
+                }
+                (_, AppEventKind::ModelDownloadCancelled) => {
+                    info!("Model download cancelled");
+                    let _ = self.ui_update_tx.send(UiUpdate::ModelDownloadCancelled);
+                }
                 (source, kind) => {
                     let _ = (source, kind);
                     // TODO: handle other app events

@@ -581,25 +581,18 @@ struct UiRuntime {
     snapshot_selected_input_device: Option<String>,
     snapshot_global_hotkey: String,
     /// Current app phase — Setup wizard or Main UI.
-    #[allow(dead_code)]
     phase: AppPhase,
     /// Index of the selected model in the wizard's download list.
-    #[allow(dead_code)]
     wizard_selected_model: usize,
     /// Download progress: (bytes_downloaded, total_bytes). None if not downloading.
-    #[allow(dead_code)]
     wizard_download_progress: Option<(u64, u64)>,
     /// Whether a download is currently in progress.
-    #[allow(dead_code)]
     wizard_downloading: bool,
     /// Error message to display in the wizard, if any.
-    #[allow(dead_code)]
     wizard_error: Option<String>,
     /// Cancel flag for the download thread.
-    #[allow(dead_code)]
     wizard_cancel_flag: Arc<AtomicBool>,
     /// Whether the wizard was opened from settings (shows Cancel/Back button).
-    #[allow(dead_code)]
     wizard_from_settings: bool,
 }
 
@@ -635,25 +628,15 @@ enum Message {
     FlashAttnToggled(bool),
     NoTimestampsToggled(bool),
     SwitchConfigTab(ConfigTab),
-    #[allow(dead_code)]
     WizardSelectModel(usize),
-    #[allow(dead_code)]
     WizardStartDownload,
-    #[allow(dead_code)]
     WizardCancelDownload,
-    #[allow(dead_code)]
     WizardBrowseModel,
-    #[allow(dead_code)]
     WizardModelPicked(Option<String>),
-    #[allow(dead_code)]
     WizardDownloadProgress(u64, u64),
-    #[allow(dead_code)]
     WizardDownloadComplete(std::path::PathBuf),
-    #[allow(dead_code)]
     WizardDownloadFailed(String),
-    #[allow(dead_code)]
     WizardDownloadCancelled,
-    #[allow(dead_code)]
     WizardBack,
     #[allow(dead_code)]
     OpenWizardFromSettings,
@@ -813,10 +796,18 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     state.snapshot_selected_input_device = selected_input_device;
                     state.snapshot_global_hotkey = global_hotkey;
                 }
-                UiUpdate::ModelDownloadProgress(_, _) => {}
-                UiUpdate::ModelDownloadComplete(_) => {}
-                UiUpdate::ModelDownloadFailed(_) => {}
-                UiUpdate::ModelDownloadCancelled => {}
+                UiUpdate::ModelDownloadProgress(downloaded, total) => {
+                    return self::update(state, Message::WizardDownloadProgress(downloaded, total));
+                }
+                UiUpdate::ModelDownloadComplete(path) => {
+                    return self::update(state, Message::WizardDownloadComplete(path));
+                }
+                UiUpdate::ModelDownloadFailed(err) => {
+                    return self::update(state, Message::WizardDownloadFailed(err));
+                }
+                UiUpdate::ModelDownloadCancelled => {
+                    return self::update(state, Message::WizardDownloadCancelled);
+                }
             }
             Task::none()
         }
@@ -1104,17 +1095,103 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_tab = tab;
             Task::none()
         }
-        Message::WizardSelectModel(_)
-        | Message::WizardStartDownload
-        | Message::WizardCancelDownload
-        | Message::WizardDownloadProgress(_, _)
-        | Message::WizardDownloadComplete(_)
-        | Message::WizardDownloadFailed(_)
-        | Message::WizardDownloadCancelled
-        | Message::WizardBack
-        | Message::OpenWizardFromSettings => Task::none(),
-        Message::WizardBrowseModel => Task::none(),
-        Message::WizardModelPicked(_) => Task::none(),
+        Message::WizardSelectModel(idx) => {
+            if idx < crate::model_downloader::WHISPER_MODELS.len() {
+                state.wizard_selected_model = idx;
+            }
+            Task::none()
+        }
+        Message::WizardStartDownload => {
+            if state.wizard_downloading {
+                return Task::none();
+            }
+            state.wizard_downloading = true;
+            state.wizard_download_progress = Some((0, 0));
+            state.wizard_error = None;
+            state.wizard_cancel_flag = Arc::new(AtomicBool::new(false));
+
+            let model = &crate::model_downloader::WHISPER_MODELS[state.wizard_selected_model];
+            crate::model_downloader::start_download(
+                model,
+                state.app_event_tx.clone(),
+                Arc::clone(&state.wizard_cancel_flag),
+            );
+            Task::none()
+        }
+        Message::WizardCancelDownload => {
+            state
+                .wizard_cancel_flag
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            Task::none()
+        }
+        Message::WizardBrowseModel => Task::perform(
+            async {
+                let handle = rfd::AsyncFileDialog::new()
+                    .set_title("Select Whisper Model")
+                    .add_filter("GGML Model", &["bin"])
+                    .pick_file()
+                    .await;
+                handle.map(|h| h.path().to_string_lossy().into_owned())
+            },
+            Message::WizardModelPicked,
+        ),
+        Message::WizardModelPicked(path) => {
+            if let Some(path) = path {
+                state.send_event(AppEventKind::UiUpdateTranscriber(TranscriberConfig {
+                    model_path: path,
+                    ..state.snapshot_transcriber.clone().unwrap_or_default()
+                }));
+                state.phase = AppPhase::Main;
+                state.wizard_error = None;
+            }
+            Task::none()
+        }
+        Message::WizardDownloadProgress(downloaded, total) => {
+            state.wizard_download_progress = Some((downloaded, total));
+            Task::none()
+        }
+        Message::WizardDownloadComplete(path) => {
+            state.wizard_downloading = false;
+            state.wizard_download_progress = None;
+            state.phase = AppPhase::Main;
+            state.wizard_error = None;
+            // The controller already saved config and restarted the transcriber
+            // when it received ModelDownloadComplete. We just transition the UI.
+            let _ = path;
+            Task::none()
+        }
+        Message::WizardDownloadFailed(err) => {
+            state.wizard_downloading = false;
+            state.wizard_download_progress = None;
+            state.wizard_error = Some(err);
+            Task::none()
+        }
+        Message::WizardDownloadCancelled => {
+            state.wizard_downloading = false;
+            state.wizard_download_progress = None;
+            state.wizard_error = None;
+            Task::none()
+        }
+        Message::WizardBack => {
+            if state.wizard_from_settings {
+                state.phase = AppPhase::Main;
+                state.wizard_error = None;
+                state.wizard_from_settings = false;
+            }
+            Task::none()
+        }
+        Message::OpenWizardFromSettings => {
+            if state.mode != AppMode::Idle {
+                return Task::none();
+            }
+            state.config_open = false;
+            state.wizard_from_settings = true;
+            state.wizard_downloading = false;
+            state.wizard_download_progress = None;
+            state.wizard_error = None;
+            state.phase = AppPhase::Setup;
+            Task::none()
+        }
         Message::DragWindow => {
             if let Some(id) = state.window_id {
                 window::drag(id)
