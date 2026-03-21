@@ -612,9 +612,6 @@ enum Message {
     SetDefaultPrompt(usize),
     PromptNameChanged(usize, String),
     PromptInstructionAction(usize, text_editor::Action),
-    ModelPathChanged(String),
-    BrowseModelPath,
-    ModelPathPicked(Option<String>),
     WindowSecondsChanged(String),
     OverlapSecondsChanged(String),
     SilenceThresholdChanged(String),
@@ -638,7 +635,6 @@ enum Message {
     WizardDownloadFailed(String),
     WizardDownloadCancelled,
     WizardBack,
-    #[allow(dead_code)]
     OpenWizardFromSettings,
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
@@ -1020,27 +1016,6 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 if idx < state.config_prompts.len() {
                     state.config_prompts[idx].instruction = state.instruction_editors[idx].text();
                 }
-            }
-            Task::none()
-        }
-        Message::ModelPathChanged(value) => {
-            state.config_model_path = value;
-            Task::none()
-        }
-        Message::BrowseModelPath => Task::perform(
-            async {
-                let handle = rfd::AsyncFileDialog::new()
-                    .set_title("Select Whisper Model")
-                    .add_filter("GGML Model", &["bin"])
-                    .pick_file()
-                    .await;
-                handle.map(|h| h.path().to_string_lossy().into_owned())
-            },
-            Message::ModelPathPicked,
-        ),
-        Message::ModelPathPicked(path) => {
-            if let Some(path) = path {
-                state.config_model_path = path;
             }
             Task::none()
         }
@@ -1847,20 +1822,24 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
     .padding(14);
 
     // ── Transcriber card ────────────────────────────────────────────
-    let model_path_input = text_input("Model path", &sf.model_path)
-        .style(borderless_input)
-        .padding(10)
-        .on_input(Message::ModelPathChanged);
+    let model_display = text(sf.model_path.clone()).size(12).color(MUTED);
 
-    // folder_open: E2C8
-    let browse_btn = button(icon('\u{E2C8}', 18.0))
-        .style(icon_btn)
-        .padding([8, 10])
-        .on_press(Message::BrowseModelPath);
+    // swap_horiz: E8D4
+    let change_model_btn = button(
+        row![icon('\u{E8D4}', 16.0), text("Change Model").size(13)]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
+    )
+    .style(ghost_btn)
+    .padding([6, 14])
+    .on_press(Message::OpenWizardFromSettings);
 
-    let model_path_row = row![container(model_path_input).width(Fill), browse_btn]
-        .spacing(4)
-        .align_y(iced::Alignment::Center);
+    let model_section = column![
+        text("Model").size(11).color(MUTED),
+        model_display,
+        change_model_btn,
+    ]
+    .spacing(4);
 
     let window_secs_input = text_input("Window seconds", &sf.window_secs)
         .style(borderless_input)
@@ -1879,7 +1858,7 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
 
     let transcriber_card = column![
         text("Transcriber").size(15).color(TEXT_COLOR),
-        column![text("Model Path").size(11).color(MUTED), model_path_row].spacing(4),
+        model_section,
         column![text("Window (s)").size(11).color(MUTED), window_secs_input].spacing(4),
         column![
             text("Overlap (s)").size(11).color(MUTED),
