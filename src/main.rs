@@ -23,6 +23,8 @@ fn main() {
         }
     };
 
+    let model_exists = std::path::Path::new(&config.transcriber.model_path).exists();
+
     if let Err(err) = logger::init_with_config(logger::LogConfig {
         level: config.log_level,
         path: config.log_path.clone(),
@@ -40,7 +42,7 @@ fn main() {
         recorder::Recorder::new(audio_tx, app_event_tx.clone(), config.input_device.clone());
     let mut transcriber =
         transcriber::Transcriber::new(audio_rx, app_event_tx.clone(), config.transcriber.clone());
-    if let Err(err) = transcriber.start() {
+    if model_exists && let Err(err) = transcriber.start() {
         eprintln!("Transcriber failed to start: {err}");
         return;
     }
@@ -49,7 +51,12 @@ fn main() {
     // Global hotkey must be registered on the main thread (macOS requirement).
     let hotkey_handle = global_hotkey::HotkeyHandle::register(&config.global_hotkey);
 
-    let ui = ui::Ui::new(app_event_tx.clone(), hotkey_handle, ui_update_rx);
+    let ui = ui::Ui::new(
+        app_event_tx.clone(),
+        hotkey_handle,
+        ui_update_rx,
+        model_exists,
+    );
     let app_state = app_state::AppState::new(config);
     let (controller, shutdown_handle) = controller::Controller::new(
         recorder,

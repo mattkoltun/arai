@@ -14,6 +14,7 @@ use iced::{
     keyboard, overlay, time, window,
 };
 use log::debug;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -417,6 +418,16 @@ enum AppMode {
     Processing,
 }
 
+/// Controls whether the app shows the setup wizard or the main UI.
+#[derive(Clone, Debug, Default, PartialEq)]
+enum AppPhase {
+    /// First-launch wizard — model must be configured before proceeding.
+    #[default]
+    Setup,
+    /// Normal operation — model is configured and transcriber is running.
+    Main,
+}
+
 const MAX_PROMPTS: usize = 10;
 
 struct SetupFields {
@@ -441,6 +452,7 @@ pub struct Ui {
     app_event_tx: AppEventSender,
     hotkey_handle: Option<Arc<Mutex<HotkeyHandle>>>,
     ui_update_rx: Arc<Mutex<Option<UiUpdateReceiver>>>,
+    model_exists: bool,
 }
 
 impl Ui {
@@ -448,11 +460,13 @@ impl Ui {
         app_event_tx: AppEventSender,
         hotkey_handle: Option<HotkeyHandle>,
         ui_update_rx: UiUpdateReceiver,
+        model_exists: bool,
     ) -> Self {
         Self {
             app_event_tx,
             hotkey_handle: hotkey_handle.map(|h| Arc::new(Mutex::new(h))),
             ui_update_rx: Arc::new(Mutex::new(Some(ui_update_rx))),
+            model_exists,
         }
     }
 
@@ -460,6 +474,7 @@ impl Ui {
         let app_event_tx = self.app_event_tx;
         let hotkey_handle = self.hotkey_handle;
         let ui_update_rx = self.ui_update_rx;
+        let model_exists = self.model_exists;
         let boot = move || {
             (
                 UiRuntime {
@@ -497,6 +512,17 @@ impl Ui {
                     snapshot_transcriber: None,
                     snapshot_selected_input_device: None,
                     snapshot_global_hotkey: String::new(),
+                    phase: if model_exists {
+                        AppPhase::Main
+                    } else {
+                        AppPhase::Setup
+                    },
+                    wizard_selected_model: 2,
+                    wizard_download_progress: None,
+                    wizard_downloading: false,
+                    wizard_error: None,
+                    wizard_cancel_flag: Arc::new(AtomicBool::new(false)),
+                    wizard_from_settings: false,
                 },
                 Task::none(),
             )
@@ -554,6 +580,27 @@ struct UiRuntime {
     snapshot_transcriber: Option<TranscriberConfig>,
     snapshot_selected_input_device: Option<String>,
     snapshot_global_hotkey: String,
+    /// Current app phase — Setup wizard or Main UI.
+    #[allow(dead_code)]
+    phase: AppPhase,
+    /// Index of the selected model in the wizard's download list.
+    #[allow(dead_code)]
+    wizard_selected_model: usize,
+    /// Download progress: (bytes_downloaded, total_bytes). None if not downloading.
+    #[allow(dead_code)]
+    wizard_download_progress: Option<(u64, u64)>,
+    /// Whether a download is currently in progress.
+    #[allow(dead_code)]
+    wizard_downloading: bool,
+    /// Error message to display in the wizard, if any.
+    #[allow(dead_code)]
+    wizard_error: Option<String>,
+    /// Cancel flag for the download thread.
+    #[allow(dead_code)]
+    wizard_cancel_flag: Arc<AtomicBool>,
+    /// Whether the wizard was opened from settings (shows Cancel/Back button).
+    #[allow(dead_code)]
+    wizard_from_settings: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -588,6 +635,28 @@ enum Message {
     FlashAttnToggled(bool),
     NoTimestampsToggled(bool),
     SwitchConfigTab(ConfigTab),
+    #[allow(dead_code)]
+    WizardSelectModel(usize),
+    #[allow(dead_code)]
+    WizardStartDownload,
+    #[allow(dead_code)]
+    WizardCancelDownload,
+    #[allow(dead_code)]
+    WizardBrowseModel,
+    #[allow(dead_code)]
+    WizardModelPicked(Option<String>),
+    #[allow(dead_code)]
+    WizardDownloadProgress(u64, u64),
+    #[allow(dead_code)]
+    WizardDownloadComplete(std::path::PathBuf),
+    #[allow(dead_code)]
+    WizardDownloadFailed(String),
+    #[allow(dead_code)]
+    WizardDownloadCancelled,
+    #[allow(dead_code)]
+    WizardBack,
+    #[allow(dead_code)]
+    OpenWizardFromSettings,
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
     WindowOpened(window::Id),
@@ -1035,6 +1104,17 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_tab = tab;
             Task::none()
         }
+        Message::WizardSelectModel(_)
+        | Message::WizardStartDownload
+        | Message::WizardCancelDownload
+        | Message::WizardDownloadProgress(_, _)
+        | Message::WizardDownloadComplete(_)
+        | Message::WizardDownloadFailed(_)
+        | Message::WizardDownloadCancelled
+        | Message::WizardBack
+        | Message::OpenWizardFromSettings => Task::none(),
+        Message::WizardBrowseModel => Task::none(),
+        Message::WizardModelPicked(_) => Task::none(),
         Message::DragWindow => {
             if let Some(id) = state.window_id {
                 window::drag(id)

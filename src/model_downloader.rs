@@ -3,8 +3,8 @@ use crate::config::default_model_dir;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource};
 use log::{error, info};
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 /// Available Whisper model variants.
