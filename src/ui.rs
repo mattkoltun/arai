@@ -1328,38 +1328,179 @@ fn restore_cursor(content: &mut text_editor::Content, line: usize, col: usize) {
 
 // ── Views ────────────────────────────────────────────────────────────
 
-fn view(state: &UiRuntime) -> Element<'_, Message> {
-    let content = if state.config_open {
-        let setup_fields = SetupFields {
-            model_path: state.config_model_path.clone(),
-            window_secs: state.config_window_seconds.clone(),
-            overlap_secs: state.config_overlap_seconds.clone(),
-            silence_thresh: state.config_silence_threshold.clone(),
-            input_devices: state.config_input_devices.clone(),
-            selected_input_device: state.config_selected_input_device.clone(),
-            global_hotkey: state.config_global_hotkey.clone(),
-            hotkey_listening: state.config_hotkey_listening,
-        };
-        view_config(
-            state,
-            state.config_prompts.clone(),
-            state.config_default,
-            setup_fields,
-            state.config_tab.clone(),
-        )
-    } else {
-        let listening = state.mode == AppMode::Listening;
-        let processing = state.mode == AppMode::Processing;
-        let reconciling = state.mode == AppMode::Reconciling;
+fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
+    use iced::widget::progress_bar;
 
-        view_main(
-            state,
-            listening,
-            processing,
-            reconciling,
-            !state.input.trim().is_empty(),
-            state.input.chars().count(),
-        )
+    // Close button (top-right)
+    let close_btn = button(icon('\u{E5CD}', 20.0))
+        .style(icon_btn)
+        .padding(6)
+        .on_press(Message::Shutdown);
+
+    let mut top_row = row![].align_y(iced::Alignment::Center);
+    if state.wizard_from_settings {
+        // arrow_back: E5C4
+        let back_btn = button(icon('\u{E5C4}', 20.0))
+            .style(icon_btn)
+            .padding(6)
+            .on_press(Message::WizardBack);
+        top_row = top_row.push(back_btn);
+    }
+    top_row = top_row.push(container(close_btn).align_right(Fill));
+
+    let top_bar = container(top_row).padding([10, 14]).width(Fill);
+
+    // Title
+    let title = text("Whisper Model Setup").size(18).color(TEXT_COLOR);
+    let subtitle = text("Select a model to download, or browse for an existing one.")
+        .size(12)
+        .color(MUTED);
+
+    // Model list
+    let models = crate::model_downloader::WHISPER_MODELS;
+    let mut model_list = column![].spacing(4);
+    for (idx, model) in models.iter().enumerate() {
+        let is_selected = idx == state.wizard_selected_model;
+        let label = text(format!(
+            "{}  —  {}  —  {}",
+            model.name, model.size_label, model.description
+        ))
+        .size(12)
+        .color(if is_selected { PINK } else { TEXT_COLOR });
+
+        let model_btn = button(label)
+            .style(if is_selected {
+                carousel_chip_active
+            } else {
+                carousel_chip_inactive
+            })
+            .padding([8, 12])
+            .width(Fill)
+            .on_press(Message::WizardSelectModel(idx));
+        model_list = model_list.push(model_btn);
+    }
+
+    // Download / Cancel button
+    let download_section = if state.wizard_downloading {
+        let (downloaded, total) = state.wizard_download_progress.unwrap_or((0, 0));
+        let pct = if total > 0 {
+            (downloaded as f32 / total as f32) * 100.0
+        } else {
+            0.0
+        };
+        let progress = container(progress_bar(0.0..=100.0, pct)).height(8);
+        let progress_text = if total > 0 {
+            text(format!(
+                "{:.1} MB / {:.1} MB ({:.0}%)",
+                downloaded as f64 / 1_048_576.0,
+                total as f64 / 1_048_576.0,
+                pct
+            ))
+            .size(11)
+            .color(MUTED)
+        } else {
+            text("Downloading...").size(11).color(MUTED)
+        };
+
+        let cancel_btn = button(text("Cancel").size(13))
+            .style(ghost_btn)
+            .padding([8, 20])
+            .on_press(Message::WizardCancelDownload);
+
+        column![progress, progress_text, cancel_btn]
+            .spacing(8)
+            .align_x(iced::Alignment::Center)
+    } else {
+        let download_btn = button(text("Download").size(13))
+            .style(primary_btn)
+            .padding([8, 20])
+            .on_press(Message::WizardStartDownload);
+
+        column![download_btn].align_x(iced::Alignment::Center)
+    };
+
+    // Divider text
+    let or_text = text("— or —").size(12).color(MUTED);
+
+    // Browse section
+    let browse_btn = button(
+        row![
+            icon('\u{E2C8}', 16.0),
+            text("Browse for existing model").size(13)
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center),
+    )
+    .style(ghost_btn)
+    .padding([8, 16])
+    .on_press_maybe((!state.wizard_downloading).then_some(Message::WizardBrowseModel));
+
+    // Error message
+    let error_row: Element<'_, Message> = if let Some(ref err) = state.wizard_error {
+        text(err).size(12).color(RED).into()
+    } else {
+        column![].into()
+    };
+
+    let body = column![
+        title,
+        subtitle,
+        container(scrollable(model_list).height(200))
+            .style(surface_container)
+            .padding(8),
+        download_section,
+        container(or_text).center_x(Fill),
+        container(browse_btn).center_x(Fill),
+        error_row,
+    ]
+    .spacing(12)
+    .padding([0, 20]);
+
+    let content = column![top_bar, body];
+
+    container(content)
+        .style(bg_container)
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+fn view(state: &UiRuntime) -> Element<'_, Message> {
+    let content = match state.phase {
+        AppPhase::Setup => view_wizard(state),
+        AppPhase::Main => {
+            if state.config_open {
+                let setup_fields = SetupFields {
+                    model_path: state.config_model_path.clone(),
+                    window_secs: state.config_window_seconds.clone(),
+                    overlap_secs: state.config_overlap_seconds.clone(),
+                    silence_thresh: state.config_silence_threshold.clone(),
+                    input_devices: state.config_input_devices.clone(),
+                    selected_input_device: state.config_selected_input_device.clone(),
+                    global_hotkey: state.config_global_hotkey.clone(),
+                    hotkey_listening: state.config_hotkey_listening,
+                };
+                view_config(
+                    state,
+                    state.config_prompts.clone(),
+                    state.config_default,
+                    setup_fields,
+                    state.config_tab.clone(),
+                )
+            } else {
+                let listening = state.mode == AppMode::Listening;
+                let processing = state.mode == AppMode::Processing;
+                let reconciling = state.mode == AppMode::Reconciling;
+                view_main(
+                    state,
+                    listening,
+                    processing,
+                    reconciling,
+                    !state.input.trim().is_empty(),
+                    state.input.chars().count(),
+                )
+            }
+        }
     };
 
     iced::widget::mouse_area(content)
