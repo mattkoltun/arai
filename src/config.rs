@@ -11,8 +11,10 @@ const DEFAULT_AGENT_PROMPT: &str =
 /// - macOS: `~/Library/Application Support/arai/models/`
 /// - Linux: `~/.local/share/arai/models/`
 pub fn default_model_dir() -> PathBuf {
-    dirs::data_local_dir()
+    dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
+        .join(".local")
+        .join("share")
         .join("arai")
         .join("models")
 }
