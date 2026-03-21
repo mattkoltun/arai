@@ -1,6 +1,7 @@
 use crate::channels::{AppEventSender, UiUpdateReceiver};
 use crate::config::{AgentPrompt, TranscriberConfig};
 use crate::global_hotkey::HotkeyHandle;
+use crate::history::HistoryRecord;
 use crate::messages::{ApiKeyStatus, AppEvent, AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
 use futures::SinkExt;
 use iced::font::Family;
@@ -214,6 +215,21 @@ fn carousel_chip_inactive(_theme: &Theme, status: button::Status) -> button::Sty
             color: Color::TRANSPARENT,
             width: 0.0,
             radius: 14.0.into(),
+        },
+        shadow: Default::default(),
+        snap: false,
+    }
+}
+
+// History entry card — elevated surface with rounded corners
+fn history_card(_theme: &Theme) -> container::Style {
+    container::Style {
+        text_color: None,
+        background: Some(Background::Color(Color::from_rgb(0.145, 0.153, 0.192))),
+        border: Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.04),
+            width: 1.0,
+            radius: 12.0.into(),
         },
         shadow: Default::default(),
         snap: false,
@@ -538,6 +554,8 @@ impl Ui {
                     config_api_key_status: ApiKeyStatus::NotSet,
                     last_error: None,
                     showing_error_detail: false,
+                    history_open: false,
+                    history_entries: Vec::new(),
                 },
                 Task::none(),
             )
@@ -619,6 +637,10 @@ struct UiRuntime {
     last_error: Option<ErrorInfo>,
     /// Whether the error detail view is currently shown.
     showing_error_detail: bool,
+    /// Whether the history viewer is currently open.
+    history_open: bool,
+    /// Loaded history entries for the viewer (newest first).
+    history_entries: Vec<HistoryRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -665,6 +687,9 @@ enum Message {
     WizardApiKeySave,
     WizardApiKeySkip,
     OpenApiKeyFromSettings,
+    OpenHistory,
+    CloseHistory,
+    CopyHistoryEntry(usize),
     ShowErrorDetail,
     DismissError,
     Shutdown,
@@ -1271,6 +1296,25 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.phase = AppPhase::SetupApiKey;
             Task::none()
         }
+        Message::OpenHistory => {
+            state.history_entries = crate::history::load_recent(50);
+            state.history_open = true;
+            Task::none()
+        }
+        Message::CloseHistory => {
+            state.history_open = false;
+            state.history_entries.clear();
+            Task::none()
+        }
+        Message::CopyHistoryEntry(index) => {
+            if index >= state.history_entries.len() {
+                return Task::none();
+            }
+            let text = state.history_entries[index].text.clone();
+            state.history_open = false;
+            state.history_entries.clear();
+            iced::clipboard::write::<Message>(text)
+        }
         Message::ShowErrorDetail => {
             state.showing_error_detail = true;
             Task::none()
@@ -1748,6 +1792,8 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
                     setup_fields,
                     state.config_tab.clone(),
                 )
+            } else if state.history_open {
+                view_history(state)
             } else {
                 let listening = state.mode == AppMode::Listening;
                 let processing = state.mode == AppMode::Processing;
@@ -1873,13 +1919,19 @@ fn view_main<'a>(
         .padding([8, 12])
         .on_press_maybe((has_text && !busy).then_some(Message::Copy));
 
+    // history: E889
+    let history_btn = button(icon('\u{E889}', 22.0))
+        .style(icon_btn)
+        .padding([8, 12])
+        .on_press_maybe((!busy).then_some(Message::OpenHistory));
+
     // settings: E8B8
     let settings_btn = button(icon('\u{E8B8}', 22.0))
         .style(icon_btn)
         .padding([8, 12])
         .on_press_maybe((!busy).then_some(Message::OpenConfig));
 
-    let button_group = row![mic_btn, send_btn, copy_btn, settings_btn]
+    let button_group = row![mic_btn, send_btn, copy_btn, history_btn, settings_btn]
         .spacing(16)
         .align_y(iced::Alignment::Center);
 
@@ -1992,6 +2044,83 @@ fn view_error_detail(error: &ErrorInfo) -> Element<'_, Message> {
     container(content)
         .style(surface_container)
         .padding(4)
+        .height(Fill)
+        .width(Fill)
+        .into()
+}
+
+/// Renders the history viewer showing recent copy+hide entries.
+fn view_history(state: &UiRuntime) -> Element<'_, Message> {
+    let close_btn = button(icon('\u{E5CD}', 20.0))
+        .style(icon_btn)
+        .padding(6)
+        .on_press(Message::CloseHistory);
+
+    let top_bar =
+        container(row![container(close_btn).align_right(Fill)].align_y(iced::Alignment::Center))
+            .padding([10, 14])
+            .width(Fill);
+
+    let body: Element<'_, Message> = if state.history_entries.is_empty() {
+        container(text("No history yet.").size(15).color(MUTED))
+            .center_x(Fill)
+            .center_y(Fill)
+            .height(Fill)
+            .width(Fill)
+            .into()
+    } else {
+        let mut entries_col = column![].spacing(10);
+        for (index, entry) in state.history_entries.iter().enumerate() {
+            // Cap display text at ~10 lines worth of characters.
+            let display_text = if entry.text.chars().count() > 500 {
+                let truncated: String = entry.text.chars().take(500).collect();
+                format!("{truncated}...")
+            } else {
+                entry.text.clone()
+            };
+
+            let copy_btn = button(
+                row![icon('\u{E14D}', 18.0), text("Copy").size(12)]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+            )
+            .style(ghost_btn)
+            .padding([6, 12])
+            .on_press(Message::CopyHistoryEntry(index));
+
+            let text_content = scrollable(
+                text(display_text)
+                    .size(14)
+                    .color(TEXT_COLOR)
+                    .wrapping(text::Wrapping::Word),
+            )
+            .height(iced::Length::Shrink);
+
+            let timestamp_label = text(&entry.timestamp).size(11).color(MUTED);
+
+            let card_content = column![
+                text_content,
+                row![timestamp_label, container(copy_btn).align_right(Fill)]
+                    .align_y(iced::Alignment::Center),
+            ]
+            .spacing(8)
+            .padding(14);
+
+            let card = container(card_content)
+                .style(history_card)
+                .width(Fill);
+
+            entries_col = entries_col.push(card);
+        }
+        scrollable(entries_col.padding([0, 14]))
+            .height(Fill)
+            .into()
+    };
+
+    let content = column![top_bar, body].height(Fill);
+
+    container(content)
+        .style(bg_container)
         .height(Fill)
         .width(Fill)
         .into()
