@@ -2,13 +2,41 @@ use crate::agent::Agent;
 use crate::app_state::AppStateHandle;
 use crate::channels::{AppEventReceiver, AppEventSender, UiUpdateSender};
 use crate::config::TranscriberConfig;
-use crate::messages::{AppEvent, AppEventKind, AppEventSource, UiUpdate};
+use crate::messages::{AppEvent, AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
 use log::{debug, error, info};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+/// Formats current UTC time as HH:MM:SS for error timestamps.
+fn format_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let hours = (secs / 3600) % 24;
+    let minutes = (secs / 60) % 60;
+    let seconds = secs % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+/// Builds an `ErrorInfo` by splitting the message on the first ": ".
+/// The part before becomes the title, the part after becomes the detail.
+fn build_error_info(source_name: &str, message: &str) -> ErrorInfo {
+    let (title, detail) = match message.split_once(": ") {
+        Some((t, d)) => (t.to_string(), d.to_string()),
+        None => (format!("{source_name} error"), message.to_string()),
+    };
+    ErrorInfo {
+        source: source_name.to_string(),
+        title,
+        detail,
+        timestamp: format_timestamp(),
+    }
+}
 
 /// Lightweight handle that allows external code (e.g. main) to signal shutdown
 /// without holding the entire Controller behind an Arc.
@@ -214,10 +242,13 @@ impl Controller {
                 }
                 (AppEventSource::Recorder, AppEventKind::Error(message)) => {
                     error!("Recorder event: {message}");
-                    // TODO: implement recorder error handling (e.g., restart recorder or update UI)
+                    let info = build_error_info("Recorder", &message);
+                    let _ = self.ui_update_tx.send(UiUpdate::ErrorOccurred(info));
                 }
                 (AppEventSource::Transcriber, AppEventKind::Error(message)) => {
                     error!("Transcriber event: {message}");
+                    let info = build_error_info("Transcriber", &message);
+                    let _ = self.ui_update_tx.send(UiUpdate::ErrorOccurred(info));
                 }
                 (AppEventSource::Transcriber, AppEventKind::Transcription(text)) => {
                     debug!("Controller received transcript");
@@ -259,6 +290,8 @@ impl Controller {
                 }
                 (AppEventSource::Agent, AppEventKind::Error(message)) => {
                     error!("Agent event: {message}");
+                    let info = build_error_info("Agent", &message);
+                    let _ = self.ui_update_tx.send(UiUpdate::ErrorOccurred(info));
                     let _ = self.ui_update_tx.send(UiUpdate::ProcessingFailed(message));
                 }
                 (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
@@ -468,5 +501,29 @@ mod tests {
     #[test]
     fn full_overlap_returns_empty() {
         assert_eq!(strip_overlap("hello world", "hello world"), "");
+    }
+
+    #[test]
+    fn build_error_info_splits_on_colon() {
+        let info = super::build_error_info("Agent", "Agent request failed: connection timeout");
+        assert_eq!(info.source, "Agent");
+        assert_eq!(info.title, "Agent request failed");
+        assert_eq!(info.detail, "connection timeout");
+        assert!(!info.timestamp.is_empty());
+    }
+
+    #[test]
+    fn build_error_info_no_colon_uses_source_as_title() {
+        let info = super::build_error_info("Recorder", "something went wrong");
+        assert_eq!(info.source, "Recorder");
+        assert_eq!(info.title, "Recorder error");
+        assert_eq!(info.detail, "something went wrong");
+    }
+
+    #[test]
+    fn build_error_info_multiple_colons_splits_on_first() {
+        let info = super::build_error_info("Transcriber", "Model error: path: /foo/bar not found");
+        assert_eq!(info.title, "Model error");
+        assert_eq!(info.detail, "path: /foo/bar not found");
     }
 }

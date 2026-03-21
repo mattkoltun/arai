@@ -40,6 +40,8 @@ pub enum UiUpdate {
     ModelDownloadFailed(String),
     /// Model download was cancelled.
     ModelDownloadCancelled,
+    /// An error occurred in a component — display to user.
+    ErrorOccurred(ErrorInfo),
 }
 
 /// Status of the OpenAI API key configuration.
@@ -53,6 +55,23 @@ pub enum ApiKeyStatus {
     /// No key configured.
     #[default]
     NotSet,
+}
+
+/// Structured error information for display in the UI.
+#[derive(Clone, Debug)]
+pub struct ErrorInfo {
+    /// Which component produced the error ("Recorder", "Transcriber", "Agent").
+    #[allow(dead_code)]
+    pub source: String,
+    /// Short summary extracted from before the first ": " in the error message.
+    #[allow(dead_code)]
+    pub title: String,
+    /// Full error detail extracted from after the first ": ".
+    #[allow(dead_code)]
+    pub detail: String,
+    /// Human-readable UTC timestamp (e.g., "14:32:05").
+    #[allow(dead_code)]
+    pub timestamp: String,
 }
 
 // #[derive(Clone, Debug)]

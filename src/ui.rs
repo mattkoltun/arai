@@ -1,7 +1,7 @@
 use crate::channels::{AppEventSender, UiUpdateReceiver};
 use crate::config::{AgentPrompt, TranscriberConfig};
 use crate::global_hotkey::HotkeyHandle;
-use crate::messages::{ApiKeyStatus, AppEvent, AppEventKind, AppEventSource, UiUpdate};
+use crate::messages::{ApiKeyStatus, AppEvent, AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
 use futures::SinkExt;
 use iced::font::Family;
 use iced::theme::Palette;
@@ -536,6 +536,8 @@ impl Ui {
                     wizard_api_key_input: String::new(),
                     wizard_api_key_error: None,
                     config_api_key_status: ApiKeyStatus::NotSet,
+                    last_error: None,
+                    showing_error_detail: false,
                 },
                 Task::none(),
             )
@@ -613,6 +615,10 @@ struct UiRuntime {
     wizard_api_key_error: Option<String>,
     /// API key status from the latest config snapshot.
     config_api_key_status: ApiKeyStatus,
+    /// The most recent error, if any. Cleared when the user dismisses it.
+    last_error: Option<ErrorInfo>,
+    /// Whether the error detail view is currently shown.
+    showing_error_detail: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -659,6 +665,8 @@ enum Message {
     WizardApiKeySave,
     WizardApiKeySkip,
     OpenApiKeyFromSettings,
+    ShowErrorDetail,
+    DismissError,
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
     WindowOpened(window::Id),
@@ -789,6 +797,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     log::error!("Processing failed: {message}");
                     state.mode = AppMode::Idle;
                     state.status_line = "Error — try again".to_string();
+                }
+                UiUpdate::ErrorOccurred(error_info) => {
+                    state.last_error = Some(error_info);
                 }
                 UiUpdate::ReconciliationStarted => {
                     state.mode = AppMode::Reconciling;
@@ -1248,6 +1259,15 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.phase = AppPhase::SetupApiKey;
             Task::none()
         }
+        Message::ShowErrorDetail => {
+            state.showing_error_detail = true;
+            Task::none()
+        }
+        Message::DismissError => {
+            state.last_error = None;
+            state.showing_error_detail = false;
+            Task::none()
+        }
         Message::DragWindow => {
             if let Some(id) = state.window_id {
                 window::drag(id)
@@ -1272,10 +1292,10 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 return Task::none();
             }
             match key {
-                keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.shift() => {
+                keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.command() => {
                     update(state, Message::Copy)
                 }
-                keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.is_empty() => {
                     state.submit();
                     Task::none()
                 }
@@ -1764,8 +1784,11 @@ fn view_main<'a>(
         .padding(16)
         .height(Fill)
         .key_binding(|key_press| match &key_press.key {
-            keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.shift() => {
+            keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.command() => {
                 Some(text_editor::Binding::Custom(Message::Copy))
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.shift() => {
+                text_editor::Binding::from_key_press(key_press)
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.is_empty() => {
                 Some(text_editor::Binding::Custom(Message::Submit))
@@ -1848,11 +1871,25 @@ fn view_main<'a>(
         .spacing(16)
         .align_y(iced::Alignment::Center);
 
-    let bottom_bar = column![
+    let mut bottom_bar = column![
         container(button_group).center_x(Fill),
         container(char_count_text).padding([4, 18])
     ]
     .spacing(6);
+
+    if let Some(ref error) = state.last_error
+        && !state.showing_error_detail
+    {
+        let warning_btn = button(
+            row![icon('\u{E002}', 16.0), text(&error.title).size(11)]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+        )
+        .style(icon_btn_danger)
+        .padding([2, 8])
+        .on_press(Message::ShowErrorDetail);
+        bottom_bar = bottom_bar.push(container(warning_btn).padding([0, 14]));
+    }
 
     // ── Prompt carousel ──────────────────────────────────────────────
     let prompt_carousel = {
@@ -1879,12 +1916,21 @@ fn view_main<'a>(
         .padding([0, 14])
     };
 
-    let body = column![
-        prompt_carousel,
+    let content_area: Element<'_, Message> = if state.showing_error_detail
+        && let Some(ref error) = state.last_error
+    {
+        view_error_detail(error)
+    } else {
         container(editor_widget)
             .style(surface_container)
             .padding(4)
-            .height(FillPortion(8)),
+            .height(Fill)
+            .into()
+    };
+
+    let body = column![
+        prompt_carousel,
+        container(content_area).height(FillPortion(8)),
         container(bottom_bar).height(FillPortion(2))
     ]
     .spacing(8)
@@ -1896,6 +1942,46 @@ fn view_main<'a>(
         .style(bg_container)
         .width(Fill)
         .height(Fill)
+        .into()
+}
+
+/// Renders the error detail view that replaces the editor when an error is being viewed.
+fn view_error_detail(error: &ErrorInfo) -> Element<'_, Message> {
+    let title = text(&error.title).size(18).color(RED);
+    let source_line = text(format!("Source: {}", error.source))
+        .size(12)
+        .color(MUTED);
+    let time_line = text(format!("Time: {}", error.timestamp))
+        .size(12)
+        .color(MUTED);
+    let detail = text(&error.detail).size(13).color(TEXT_COLOR);
+
+    let dismiss_btn = button(
+        row![icon('\u{E5CD}', 16.0), text("Dismiss").size(13)]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
+    )
+    .style(ghost_btn)
+    .padding([6, 14])
+    .on_press(Message::DismissError);
+
+    let content = column![
+        title,
+        source_line,
+        time_line,
+        container(scrollable(detail).height(Fill))
+            .padding([10, 0])
+            .height(Fill),
+        dismiss_btn,
+    ]
+    .spacing(8)
+    .padding(14);
+
+    container(content)
+        .style(surface_container)
+        .padding(4)
+        .height(Fill)
+        .width(Fill)
         .into()
 }
 
