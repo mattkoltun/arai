@@ -896,6 +896,18 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
             debug!("UI copying text to clipboard");
             let text = state.input.clone();
+            let prompt = state
+                .snapshot_prompts
+                .get(state.active_prompt)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            let _ = state.app_event_tx.send(AppEvent {
+                source: AppEventSource::Ui,
+                kind: AppEventKind::UiCopied {
+                    text: text.clone(),
+                    prompt,
+                },
+            });
             state.input.clear();
             state.editor = text_editor::Content::new();
             hide_app();

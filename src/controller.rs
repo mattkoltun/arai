@@ -2,6 +2,7 @@ use crate::agent::Agent;
 use crate::app_state::AppStateHandle;
 use crate::channels::{AppEventReceiver, AppEventSender, UiUpdateSender};
 use crate::config::TranscriberConfig;
+use crate::history::History;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
@@ -61,6 +62,7 @@ pub struct Controller {
     app_state: AppStateHandle,
     ui_update_tx: UiUpdateSender,
     shutting_down: Arc<AtomicBool>,
+    history: History,
 }
 
 impl Controller {
@@ -86,6 +88,7 @@ impl Controller {
             app_state,
             ui_update_tx,
             shutting_down: flag,
+            history: History::new(),
         };
         (controller, handle)
     }
@@ -357,6 +360,10 @@ impl Controller {
                     self.app_state.update_api_key(key.clone());
                     self.restart_agent(key);
                     self.send_config_snapshot();
+                }
+                (AppEventSource::Ui, AppEventKind::UiCopied { text, prompt }) => {
+                    debug!("Saving copy to history");
+                    self.history.save(text, prompt);
                 }
                 (_, AppEventKind::ModelDownloadProgress(downloaded, total)) => {
                     let _ = self

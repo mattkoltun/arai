@@ -119,6 +119,11 @@ pub enum AppEventKind {
     ModelDownloadFailed(String),
     /// Model download was cancelled by the user.
     ModelDownloadCancelled,
+    /// User triggered copy+hide — save text to session history.
+    UiCopied {
+        text: String,
+        prompt: String,
+    },
 }
 
 // #[derive(Clone, Debug)]

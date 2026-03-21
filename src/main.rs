@@ -4,6 +4,7 @@ mod channels;
 mod config;
 mod controller;
 mod global_hotkey;
+mod history;
 mod keyring_store;
 mod logger;
 mod messages;
