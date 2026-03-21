@@ -156,6 +156,16 @@ impl Controller {
         }
     }
 
+    /// Drops the current Agent and creates a new one with the given API key.
+    fn restart_agent(&mut self, api_key: String) {
+        info!("Restarting agent with new API key");
+        let old = std::mem::replace(
+            &mut self.agent,
+            Agent::new(self.app_event_tx.clone(), api_key),
+        );
+        drop(old);
+    }
+
     /// Sends a `ConfigSnapshot` to the UI so it has the current config state.
     fn send_config_snapshot(&self) {
         let snapshot = self.app_state.snapshot();
@@ -165,6 +175,7 @@ impl Controller {
             transcriber: snapshot.transcriber,
             selected_input_device: snapshot.input_device,
             global_hotkey: snapshot.global_hotkey,
+            api_key_status: snapshot.api_key_status,
         });
     }
 
@@ -303,6 +314,15 @@ impl Controller {
                 (AppEventSource::Ui, AppEventKind::UiUpdateGlobalHotkey(hotkey)) => {
                     info!("Controller updating global hotkey: {hotkey}");
                     self.app_state.update_global_hotkey(hotkey);
+                    self.send_config_snapshot();
+                }
+                (AppEventSource::Ui, AppEventKind::UiUpdateApiKey(key)) => {
+                    info!("Controller updating API key");
+                    if let Err(e) = crate::keyring_store::set_api_key(&key) {
+                        error!("Failed to save API key to keyring: {e}");
+                    }
+                    self.app_state.update_api_key(key.clone());
+                    self.restart_agent(key);
                     self.send_config_snapshot();
                 }
                 (_, AppEventKind::ModelDownloadProgress(downloaded, total)) => {

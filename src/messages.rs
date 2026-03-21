@@ -29,6 +29,8 @@ pub enum UiUpdate {
         transcriber: TranscriberConfig,
         selected_input_device: Option<String>,
         global_hotkey: String,
+        #[allow(dead_code)]
+        api_key_status: ApiKeyStatus,
     },
     /// Model download progress update for the wizard.
     ModelDownloadProgress(u64, u64),
@@ -38,6 +40,19 @@ pub enum UiUpdate {
     ModelDownloadFailed(String),
     /// Model download was cancelled.
     ModelDownloadCancelled,
+}
+
+/// Status of the OpenAI API key configuration.
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum ApiKeyStatus {
+    /// Key is stored in keyring; carries masked display string (e.g., "sk-...7xQ3").
+    Keyring(String),
+    /// Key is set via environment variable.
+    EnvVar,
+    /// No key configured.
+    #[default]
+    NotSet,
 }
 
 // #[derive(Clone, Debug)]
@@ -74,6 +89,9 @@ pub enum AppEventKind {
     UiUpdateTranscriber(TranscriberConfig),
     UiUpdateInputDevice(Option<String>),
     UiUpdateGlobalHotkey(String),
+    /// Update the OpenAI API key (UI → Controller).
+    #[allow(dead_code)]
+    UiUpdateApiKey(String),
     /// Model download progress: (bytes_downloaded, total_bytes).
     ModelDownloadProgress(u64, u64),
     /// Model download completed successfully; carries the path to the downloaded file.

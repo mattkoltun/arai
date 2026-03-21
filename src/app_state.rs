@@ -1,4 +1,5 @@
 use crate::config::{AgentPrompt, Config, TranscriberConfig};
+use crate::messages::ApiKeyStatus;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, Default)]
@@ -8,6 +9,8 @@ pub struct AppStateSnapshot {
     pub transcriber: TranscriberConfig,
     pub input_device: Option<String>,
     pub global_hotkey: String,
+    #[allow(dead_code)]
+    pub api_key_status: ApiKeyStatus,
 }
 
 /// Internal state protected by a single mutex to guarantee consistent reads
@@ -29,6 +32,29 @@ pub struct AppState {
 }
 
 pub type AppStateHandle = Arc<AppState>;
+
+/// Masks an API key for display: shows first 3 + "..." + last 4 chars.
+fn mask_api_key(key: &str) -> String {
+    if key.len() <= 7 {
+        return "sk-...".to_string();
+    }
+    format!("{}...{}", &key[..3], &key[key.len() - 4..])
+}
+
+/// Determines the API key status from runtime state.
+fn compute_api_key_status(key: &str) -> ApiKeyStatus {
+    if std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .is_some()
+    {
+        ApiKeyStatus::EnvVar
+    } else if !key.is_empty() {
+        ApiKeyStatus::Keyring(mask_api_key(key))
+    } else {
+        ApiKeyStatus::NotSet
+    }
+}
 
 impl AppState {
     pub fn new(config: Config) -> AppStateHandle {
@@ -53,6 +79,7 @@ impl AppState {
             transcriber: inner.transcriber.clone(),
             input_device: inner.config.input_device.clone(),
             global_hotkey: inner.config.global_hotkey.clone(),
+            api_key_status: compute_api_key_status(&inner.config.open_api_key),
         }
     }
 
@@ -93,6 +120,14 @@ impl AppState {
         }
     }
 
+    /// Updates the runtime API key. Does NOT save to config file —
+    /// the key is persisted via keyring, not YAML.
+    #[allow(dead_code)]
+    pub fn update_api_key(&self, key: String) {
+        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
+        inner.config.open_api_key = key;
+    }
+
     /// Returns a clone of the current transcriber configuration.
     pub fn transcriber_config(&self) -> TranscriberConfig {
         let inner = self.inner.lock().expect("app_state mutex poisoned");
@@ -126,5 +161,40 @@ mod tests {
         let snapshot = state.snapshot();
         assert_eq!(snapshot.agent_prompts.len(), 1);
         assert_eq!(snapshot.agent_prompts[0].name, "default");
+    }
+
+    #[test]
+    fn mask_api_key_shows_prefix_and_suffix() {
+        assert_eq!(mask_api_key("sk-proj-abcdefghijklmnop"), "sk-...mnop");
+    }
+
+    #[test]
+    fn mask_api_key_short_key_returns_placeholder() {
+        assert_eq!(mask_api_key("sk-abc"), "sk-...");
+    }
+
+    #[test]
+    fn update_api_key_changes_runtime_value() {
+        let state = AppState::new(test_config());
+        state.update_api_key("sk-new-key".to_string());
+        let inner = state.inner.lock().unwrap();
+        assert_eq!(inner.config.open_api_key, "sk-new-key");
+    }
+
+    #[test]
+    fn snapshot_includes_api_key_status() {
+        let state = AppState::new(test_config());
+        let snapshot = state.snapshot();
+        match snapshot.api_key_status {
+            crate::messages::ApiKeyStatus::Keyring(masked) => {
+                assert!(masked.contains("..."));
+            }
+            crate::messages::ApiKeyStatus::EnvVar => {
+                // Acceptable if env var is set
+            }
+            crate::messages::ApiKeyStatus::NotSet => {
+                panic!("Expected Keyring or EnvVar, got NotSet");
+            }
+        }
     }
 }

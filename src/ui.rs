@@ -1,7 +1,7 @@
 use crate::channels::{AppEventSender, UiUpdateReceiver};
 use crate::config::{AgentPrompt, TranscriberConfig};
 use crate::global_hotkey::HotkeyHandle;
-use crate::messages::{AppEvent, AppEventKind, AppEventSource, UiUpdate};
+use crate::messages::{ApiKeyStatus, AppEvent, AppEventKind, AppEventSource, UiUpdate};
 use futures::SinkExt;
 use iced::font::Family;
 use iced::theme::Palette;
@@ -424,6 +424,8 @@ enum AppPhase {
     /// First-launch wizard — model must be configured before proceeding.
     #[default]
     Setup,
+    /// API key configuration step.
+    SetupApiKey,
     /// Normal operation — model is configured and transcriber is running.
     Main,
 }
@@ -453,6 +455,7 @@ pub struct Ui {
     hotkey_handle: Option<Arc<Mutex<HotkeyHandle>>>,
     ui_update_rx: Arc<Mutex<Option<UiUpdateReceiver>>>,
     model_exists: bool,
+    api_key_exists: bool,
 }
 
 impl Ui {
@@ -461,12 +464,14 @@ impl Ui {
         hotkey_handle: Option<HotkeyHandle>,
         ui_update_rx: UiUpdateReceiver,
         model_exists: bool,
+        api_key_exists: bool,
     ) -> Self {
         Self {
             app_event_tx,
             hotkey_handle: hotkey_handle.map(|h| Arc::new(Mutex::new(h))),
             ui_update_rx: Arc::new(Mutex::new(Some(ui_update_rx))),
             model_exists,
+            api_key_exists,
         }
     }
 
@@ -475,6 +480,7 @@ impl Ui {
         let hotkey_handle = self.hotkey_handle;
         let ui_update_rx = self.ui_update_rx;
         let model_exists = self.model_exists;
+        let api_key_exists = self.api_key_exists;
         let boot = move || {
             (
                 UiRuntime {
@@ -513,7 +519,11 @@ impl Ui {
                     snapshot_selected_input_device: None,
                     snapshot_global_hotkey: String::new(),
                     phase: if model_exists {
-                        AppPhase::Main
+                        if api_key_exists {
+                            AppPhase::Main
+                        } else {
+                            AppPhase::SetupApiKey
+                        }
                     } else {
                         AppPhase::Setup
                     },
@@ -523,6 +533,9 @@ impl Ui {
                     wizard_error: None,
                     wizard_cancel_flag: Arc::new(AtomicBool::new(false)),
                     wizard_from_settings: false,
+                    wizard_api_key_input: String::new(),
+                    wizard_api_key_error: None,
+                    config_api_key_status: ApiKeyStatus::NotSet,
                 },
                 Task::none(),
             )
@@ -594,6 +607,12 @@ struct UiRuntime {
     wizard_cancel_flag: Arc<AtomicBool>,
     /// Whether the wizard was opened from settings (shows Cancel/Back button).
     wizard_from_settings: bool,
+    /// Text input for the API key wizard.
+    wizard_api_key_input: String,
+    /// Error message for the API key wizard.
+    wizard_api_key_error: Option<String>,
+    /// API key status from the latest config snapshot.
+    config_api_key_status: ApiKeyStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -636,6 +655,10 @@ enum Message {
     WizardDownloadCancelled,
     WizardBack,
     OpenWizardFromSettings,
+    WizardApiKeyChanged(String),
+    WizardApiKeySave,
+    WizardApiKeySkip,
+    OpenApiKeyFromSettings,
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
     WindowOpened(window::Id),
@@ -671,6 +694,10 @@ impl UiRuntime {
 
     fn submit(&mut self) {
         if self.mode != AppMode::Idle || self.input.trim().is_empty() {
+            return;
+        }
+        if self.config_api_key_status == ApiKeyStatus::NotSet {
+            self.status_line = "API key required \u{2014} configure in Settings".to_string();
             return;
         }
         let instruction = self
@@ -781,6 +808,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     transcriber,
                     selected_input_device,
                     global_hotkey,
+                    api_key_status,
                 } => {
                     // Sync active_prompt to default when prompts change.
                     if state.active_prompt >= agent_prompts.len() {
@@ -791,6 +819,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     state.snapshot_transcriber = Some(transcriber);
                     state.snapshot_selected_input_device = selected_input_device;
                     state.snapshot_global_hotkey = global_hotkey;
+                    state.config_api_key_status = api_key_status;
                 }
                 UiUpdate::ModelDownloadProgress(downloaded, total) => {
                     return self::update(state, Message::WizardDownloadProgress(downloaded, total));
@@ -1116,7 +1145,11 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     model_path: path,
                     ..state.snapshot_transcriber.clone().unwrap_or_default()
                 }));
-                state.phase = AppPhase::Main;
+                state.phase = if matches!(state.config_api_key_status, ApiKeyStatus::NotSet) {
+                    AppPhase::SetupApiKey
+                } else {
+                    AppPhase::Main
+                };
                 state.wizard_error = None;
             }
             Task::none()
@@ -1128,7 +1161,11 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         Message::WizardDownloadComplete(path) => {
             state.wizard_downloading = false;
             state.wizard_download_progress = None;
-            state.phase = AppPhase::Main;
+            state.phase = if matches!(state.config_api_key_status, ApiKeyStatus::NotSet) {
+                AppPhase::SetupApiKey
+            } else {
+                AppPhase::Main
+            };
             state.wizard_error = None;
             // The controller already saved config and restarted the transcriber
             // when it received ModelDownloadComplete. We just transition the UI.
@@ -1157,7 +1194,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     state.wizard_download_progress = None;
                 }
                 state.phase = AppPhase::Main;
+                state.config_open = true;
                 state.wizard_error = None;
+                state.wizard_api_key_error = None;
                 state.wizard_from_settings = false;
             }
             Task::none()
@@ -1172,6 +1211,41 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.wizard_download_progress = None;
             state.wizard_error = None;
             state.phase = AppPhase::Setup;
+            Task::none()
+        }
+        Message::WizardApiKeyChanged(value) => {
+            state.wizard_api_key_input = value;
+            state.wizard_api_key_error = None;
+            Task::none()
+        }
+        Message::WizardApiKeySave => {
+            let key = state.wizard_api_key_input.trim().to_string();
+            if !key.starts_with("sk-") {
+                state.wizard_api_key_error = Some("API key should start with sk-".to_string());
+                return Task::none();
+            }
+            state.send_event(AppEventKind::UiUpdateApiKey(key));
+            state.wizard_api_key_input.clear();
+            state.wizard_api_key_error = None;
+            state.phase = AppPhase::Main;
+            if state.wizard_from_settings {
+                state.config_open = true;
+                state.wizard_from_settings = false;
+            }
+            Task::none()
+        }
+        Message::WizardApiKeySkip => {
+            state.wizard_api_key_input.clear();
+            state.wizard_api_key_error = None;
+            state.phase = AppPhase::Main;
+            Task::none()
+        }
+        Message::OpenApiKeyFromSettings => {
+            state.config_open = false;
+            state.wizard_from_settings = true;
+            state.wizard_api_key_input.clear();
+            state.wizard_api_key_error = None;
+            state.phase = AppPhase::SetupApiKey;
             Task::none()
         }
         Message::DragWindow => {
@@ -1387,6 +1461,101 @@ fn restore_cursor(content: &mut text_editor::Content, line: usize, col: usize) {
 
 // ── Views ────────────────────────────────────────────────────────────
 
+fn view_wizard_api_key(state: &UiRuntime) -> Element<'_, Message> {
+    // Close button (top-right)
+    let close_btn = button(icon('\u{E5CD}', 20.0))
+        .style(icon_btn)
+        .padding(6)
+        .on_press(Message::Shutdown);
+
+    let mut top_row = row![].align_y(iced::Alignment::Center);
+    if state.wizard_from_settings {
+        let back_btn = button(icon('\u{E5C4}', 20.0))
+            .style(icon_btn)
+            .padding(6)
+            .on_press(Message::WizardBack);
+        top_row = top_row.push(back_btn);
+    }
+    top_row = top_row.push(container(close_btn).align_right(Fill));
+
+    let top_bar = container(top_row).padding([10, 14]).width(Fill);
+
+    // Title
+    let title = text("OpenAI API Key").size(18).color(TEXT_COLOR);
+    let subtitle = text(
+        "Enter your API key to enable text processing.\nYou can get one at platform.openai.com",
+    )
+    .size(12)
+    .color(MUTED);
+
+    // Key input
+    let key_input = text_input("sk-...", &state.wizard_api_key_input)
+        .style(borderless_input)
+        .padding(10)
+        .on_input(Message::WizardApiKeyChanged);
+
+    // Buttons
+    let valid_key = state.wizard_api_key_input.starts_with("sk-");
+
+    let save_label = if state.wizard_from_settings {
+        "Save"
+    } else {
+        "Save & Continue"
+    };
+    let save_btn = button(text(save_label).size(13))
+        .style(primary_btn)
+        .padding([8, 20])
+        .on_press_maybe(valid_key.then_some(Message::WizardApiKeySave));
+
+    let skip_label = if state.wizard_from_settings {
+        "Cancel"
+    } else {
+        "Skip for now"
+    };
+    let skip_msg = if state.wizard_from_settings {
+        Message::WizardBack
+    } else {
+        Message::WizardApiKeySkip
+    };
+    let skip_btn = button(text(skip_label).size(12))
+        .style(ghost_btn)
+        .padding([6, 14])
+        .on_press(skip_msg);
+
+    // Error message
+    let error_row: Element<'_, Message> = if let Some(ref err) = state.wizard_api_key_error {
+        text(err).size(12).color(RED).into()
+    } else {
+        column![].into()
+    };
+
+    let body = column![
+        title,
+        subtitle,
+        container(key_input)
+            .style(surface_container)
+            .padding(4)
+            .width(Fill),
+        error_row,
+        container(
+            column![save_btn, skip_btn]
+                .spacing(8)
+                .align_x(iced::Alignment::Center)
+        )
+        .center_x(Fill),
+    ]
+    .spacing(16)
+    .padding([0, 20]);
+
+    let content = column![top_bar, body];
+
+    container(content)
+        .style(bg_container)
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
 fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
     use iced::widget::progress_bar;
 
@@ -1527,6 +1696,7 @@ fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
 fn view(state: &UiRuntime) -> Element<'_, Message> {
     let content = match state.phase {
         AppPhase::Setup => view_wizard(state),
+        AppPhase::SetupApiKey => view_wizard_api_key(state),
         AppPhase::Main => {
             if state.config_open {
                 let setup_fields = SetupFields {
@@ -1557,6 +1727,7 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
                     reconciling,
                     !state.input.trim().is_empty(),
                     state.input.chars().count(),
+                    state.config_api_key_status != ApiKeyStatus::NotSet,
                 )
             }
         }
@@ -1574,6 +1745,7 @@ fn view_main<'a>(
     reconciling: bool,
     has_text: bool,
     char_count: usize,
+    has_api_key: bool,
 ) -> Element<'a, Message> {
     // close: E5CD
     let close_btn = button(icon('\u{E5CD}', 20.0))
@@ -1657,7 +1829,7 @@ fn view_main<'a>(
         button(icon('\u{E163}', 22.0))
             .style(icon_btn)
             .padding([8, 12])
-            .on_press_maybe((!busy && has_text).then_some(Message::Submit))
+            .on_press_maybe((!busy && has_text && has_api_key).then_some(Message::Submit))
     };
 
     // copy: E14D
@@ -1780,7 +1952,7 @@ fn view_config<'a>(
     .width(Fill);
 
     let tab_content = match config_tab {
-        ConfigTab::Setup => view_setup_tab(&sf),
+        ConfigTab::Setup => view_setup_tab(&sf, &state.config_api_key_status),
         ConfigTab::Instructions => view_instructions_tab(state, &prompts, config_default),
         ConfigTab::Advanced => view_advanced_tab(state),
     };
@@ -1808,7 +1980,7 @@ fn view_config<'a>(
         .into()
 }
 
-fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
+fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'static, Message> {
     // ── Microphone card ─────────────────────────────────────────────
     let device_picker = pick_list(
         sf.input_devices.clone(),
@@ -1826,6 +1998,42 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
         column![text("Input Device").size(11).color(MUTED), device_picker].spacing(4),
     ]
     .spacing(10)
+    .padding(14);
+
+    // ── API Key card ────────────────────────────────────────────────
+    let (api_key_display, api_key_btn_label, api_key_btn_enabled) = match api_key_status {
+        ApiKeyStatus::Keyring(masked) => (masked.clone(), "Change API Key", true),
+        ApiKeyStatus::EnvVar => (
+            "Set via environment variable".to_string(),
+            "Change API Key",
+            false,
+        ),
+        ApiKeyStatus::NotSet => ("Not configured".to_string(), "Set API Key", true),
+    };
+
+    let display_color = match api_key_status {
+        ApiKeyStatus::NotSet => RED,
+        _ => MUTED,
+    };
+
+    let api_key_display_text = text(api_key_display).size(12).color(display_color);
+
+    // vpn_key: E62C
+    let api_key_btn = button(
+        row![icon('\u{E62C}', 16.0), text(api_key_btn_label).size(13)]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
+    )
+    .style(ghost_btn)
+    .padding([6, 14])
+    .on_press_maybe(api_key_btn_enabled.then_some(Message::OpenApiKeyFromSettings));
+
+    let api_key_card = column![
+        text("API Key").size(15).color(TEXT_COLOR),
+        api_key_display_text,
+        api_key_btn,
+    ]
+    .spacing(8)
     .padding(14);
 
     // ── Transcriber card ────────────────────────────────────────────
@@ -1913,6 +2121,7 @@ fn view_setup_tab(sf: &SetupFields) -> Column<'static, Message> {
 
     column![
         container(mic_card).style(surface_container).width(Fill),
+        container(api_key_card).style(surface_container).width(Fill),
         container(hotkey_card).style(surface_container).width(Fill),
         container(transcriber_card)
             .style(surface_container)

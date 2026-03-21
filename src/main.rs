@@ -4,6 +4,7 @@ mod channels;
 mod config;
 mod controller;
 mod global_hotkey;
+mod keyring_store;
 mod logger;
 mod messages;
 mod model_downloader;
@@ -24,6 +25,7 @@ fn main() {
     };
 
     let model_exists = std::path::Path::new(&config.transcriber.model_path).exists();
+    let api_key_exists = !config.open_api_key.is_empty();
 
     if let Err(err) = logger::init_with_config(logger::LogConfig {
         level: config.log_level,
@@ -56,6 +58,7 @@ fn main() {
         hotkey_handle,
         ui_update_rx,
         model_exists,
+        api_key_exists,
     );
     let app_state = app_state::AppState::new(config);
     let (controller, shutdown_handle) = controller::Controller::new(

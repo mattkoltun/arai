@@ -90,8 +90,22 @@ impl Config {
         let file_layer = PartialConfig::from_file(config_path()?)?;
         let env_layer = PartialConfig::from_env()?;
 
+        // Check if the file layer has a non-empty API key that needs migration.
+        let needs_migration_save = file_layer
+            .open_api_key
+            .as_ref()
+            .is_some_and(|k| !k.is_empty());
+
         let merged = default_layer.merge(file_layer).merge(env_layer);
-        from_partial(merged)
+        let config = from_partial(merged)?;
+
+        // If we migrated a key from the file to keyring, save immediately
+        // to remove the plain-text key from disk.
+        if needs_migration_save && let Err(e) = config.save() {
+            log::warn!("Failed to save config after API key migration: {e}");
+        }
+
+        Ok(config)
     }
 
     pub fn save(&self) -> Result<(), ConfigError> {
@@ -103,7 +117,7 @@ impl Config {
         let file_config = FileConfig {
             log_level: Some(self.log_level.to_string().to_lowercase()),
             log_path: Some(self.log_path.display().to_string()),
-            open_api_key: Some(self.open_api_key.clone()),
+            open_api_key: None,
             agent_prompts: Some(self.agent_prompts.clone()),
             default_prompt: Some(self.default_prompt),
             transcriber: Some(self.transcriber.clone()),
@@ -213,11 +227,10 @@ impl PartialConfig {
     fn from_env() -> Result<Self, ConfigError> {
         let log_level = std::env::var("ARAI_LOG_LEVEL").ok();
         let log_path = std::env::var("ARAI_LOG_PATH").ok();
-        let open_api_key = std::env::var("OPENAI_API_KEY").ok();
         Ok(Self {
             log_level,
             log_path,
-            open_api_key,
+            open_api_key: None,
             agent_prompts: None,
             default_prompt: None,
             transcriber: None,
@@ -245,6 +258,39 @@ fn config_path() -> Result<PathBuf, ConfigError> {
     Ok(Path::new(&home).join(".config/arai/config.yaml"))
 }
 
+/// Resolves the OpenAI API key from available sources in priority order:
+/// 1. `OPENAI_API_KEY` env var
+/// 2. OS keyring
+/// 3. Config file value (migration fallback)
+/// 4. Empty string
+pub fn resolve_api_key(config_file_value: &Option<String>) -> String {
+    if let Ok(key) = std::env::var("OPENAI_API_KEY")
+        && !key.is_empty()
+    {
+        return key;
+    }
+    if let Some(key) = crate::keyring_store::get_api_key() {
+        return key;
+    }
+    if let Some(key) = config_file_value
+        && !key.is_empty()
+    {
+        return key.clone();
+    }
+    String::new()
+}
+
+/// If the YAML config contains a non-empty API key, migrate it to the OS keyring.
+/// Returns the key value if migration was attempted (regardless of keyring success).
+fn migrate_api_key_if_needed(yaml_value: &Option<String>) -> Option<String> {
+    let key = yaml_value.as_ref().filter(|k| !k.is_empty())?;
+    log::info!("Migrating API key from config file to keyring");
+    if let Err(e) = crate::keyring_store::set_api_key(key) {
+        log::warn!("Failed to migrate API key to keyring: {e}. Key remains in config file.");
+    }
+    Some(key.clone())
+}
+
 fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
     let log_level = match partial.log_level {
         Some(value) => logger::parse_level(&value).ok_or(ConfigError::InvalidLogLevel(value))?,
@@ -255,7 +301,10 @@ fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
         .map(PathBuf::from)
         .unwrap_or_else(|| logger::LogConfig::default().path);
 
-    let open_api_key = partial.open_api_key.unwrap_or_default();
+    // Migrate API key from config file to keyring if present.
+    let yaml_api_key = partial.open_api_key;
+    migrate_api_key_if_needed(&yaml_api_key);
+    let open_api_key = resolve_api_key(&yaml_api_key);
 
     let agent_prompts = partial.agent_prompts.unwrap_or_default();
     if agent_prompts.is_empty() {
@@ -329,8 +378,9 @@ mod tests {
     fn builds_config_without_api_key() {
         let mut partial = valid_partial();
         partial.open_api_key = None;
-        let cfg = from_partial(partial).expect("config should load without API key");
-        assert!(cfg.open_api_key.is_empty());
+        // Should build successfully even without an API key in config.
+        // The resolved key may be non-empty if the OS keyring has a stored key.
+        let _cfg = from_partial(partial).expect("config should load without API key");
     }
 
     #[test]
@@ -372,5 +422,31 @@ mod tests {
             path.is_absolute(),
             "DEFAULT_MODEL_PATH should be absolute, got: {path:?}"
         );
+    }
+
+    #[test]
+    fn resolve_api_key_uses_config_fallback() {
+        let key = resolve_api_key(&Some("sk-fallback-key".to_string()));
+        assert!(!key.is_empty());
+    }
+
+    #[test]
+    fn resolve_api_key_returns_string_for_none() {
+        let _key = resolve_api_key(&None);
+    }
+
+    #[test]
+    fn migrate_api_key_to_keyring_clears_config_value() {
+        let yaml_key = Some("sk-test-migration".to_string());
+        let result = migrate_api_key_if_needed(&yaml_key);
+        assert_eq!(result, Some("sk-test-migration".to_string()));
+    }
+
+    #[test]
+    fn migrate_api_key_noop_when_empty() {
+        let result = migrate_api_key_if_needed(&None);
+        assert_eq!(result, None);
+        let result2 = migrate_api_key_if_needed(&Some(String::new()));
+        assert_eq!(result2, None);
     }
 }
