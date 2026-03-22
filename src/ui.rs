@@ -7,8 +7,8 @@ use futures::SinkExt;
 use iced::font::Family;
 use iced::theme::Palette;
 use iced::widget::{
-    Column, button, column, container, pick_list, row, scrollable, text, text_editor, text_input,
-    toggler,
+    Column, button, column, container, pick_list, row, scrollable, slider, text, text_editor,
+    text_input, toggler,
 };
 use iced::{
     Background, Border, Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme,
@@ -450,9 +450,9 @@ const MAX_PROMPTS: usize = 10;
 
 struct SetupFields {
     model_path: String,
-    window_secs: String,
-    overlap_secs: String,
-    silence_thresh: String,
+    window_secs: f32,
+    overlap_secs: f32,
+    silence_thresh: f32,
     input_devices: Vec<String>,
     selected_input_device: Option<String>,
     global_hotkey: String,
@@ -517,9 +517,9 @@ impl Ui {
                     config_prompts: Vec::new(),
                     config_default: 0,
                     config_model_path: String::new(),
-                    config_window_seconds: String::new(),
-                    config_overlap_seconds: String::new(),
-                    config_silence_threshold: String::new(),
+                    config_window_seconds: 3.0,
+                    config_overlap_seconds: 0.25,
+                    config_silence_threshold: 0.005,
                     config_input_devices: Vec::new(),
                     config_selected_input_device: None,
                     config_global_hotkey: String::new(),
@@ -596,9 +596,9 @@ struct UiRuntime {
     config_prompts: Vec<PromptEntry>,
     config_default: usize,
     config_model_path: String,
-    config_window_seconds: String,
-    config_overlap_seconds: String,
-    config_silence_threshold: String,
+    config_window_seconds: f32,
+    config_overlap_seconds: f32,
+    config_silence_threshold: f32,
     config_input_devices: Vec<String>,
     config_selected_input_device: Option<String>,
     config_global_hotkey: String,
@@ -660,9 +660,9 @@ enum Message {
     SetDefaultPrompt(usize),
     PromptNameChanged(usize, String),
     PromptInstructionAction(usize, text_editor::Action),
-    WindowSecondsChanged(String),
-    OverlapSecondsChanged(String),
-    SilenceThresholdChanged(String),
+    WindowSecondsChanged(f32),
+    OverlapSecondsChanged(f32),
+    SilenceThresholdChanged(f32),
     InputDeviceSelected(String),
     StartHotkeyCapture,
     HotkeyCaptured(String),
@@ -952,9 +952,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_default = state.snapshot_default;
             let tc = state.snapshot_transcriber.clone().unwrap_or_default();
             state.config_model_path = tc.model_path;
-            state.config_window_seconds = tc.window_seconds.to_string();
-            state.config_overlap_seconds = tc.overlap_seconds.to_string();
-            state.config_silence_threshold = tc.silence_threshold.to_string();
+            state.config_window_seconds = tc.window_seconds;
+            state.config_overlap_seconds = tc.overlap_seconds;
+            state.config_silence_threshold = tc.silence_threshold;
             state.config_use_gpu = tc.use_gpu;
             state.config_flash_attn = tc.flash_attn;
             state.config_no_timestamps = tc.no_timestamps;
@@ -1005,26 +1005,11 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 default_prompt: default,
             });
 
-            let window = state
-                .config_window_seconds
-                .parse::<f32>()
-                .unwrap_or(2.0)
-                .max(0.1);
-            let overlap = state
-                .config_overlap_seconds
-                .parse::<f32>()
-                .unwrap_or(0.25)
-                .max(0.0);
-            let silence = state
-                .config_silence_threshold
-                .parse::<f32>()
-                .unwrap_or(0.005)
-                .max(0.0);
             state.send_event(AppEventKind::UiUpdateTranscriber(TranscriberConfig {
                 model_path: state.config_model_path.clone(),
-                window_seconds: window,
-                overlap_seconds: overlap,
-                silence_threshold: silence,
+                window_seconds: state.config_window_seconds,
+                overlap_seconds: state.config_overlap_seconds,
+                silence_threshold: state.config_silence_threshold,
                 use_gpu: state.config_use_gpu,
                 flash_attn: state.config_flash_attn,
                 no_timestamps: state.config_no_timestamps,
@@ -1779,9 +1764,9 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
             if state.config_open {
                 let setup_fields = SetupFields {
                     model_path: state.config_model_path.clone(),
-                    window_secs: state.config_window_seconds.clone(),
-                    overlap_secs: state.config_overlap_seconds.clone(),
-                    silence_thresh: state.config_silence_threshold.clone(),
+                    window_secs: state.config_window_seconds,
+                    overlap_secs: state.config_overlap_seconds,
+                    silence_thresh: state.config_silence_threshold,
                     input_devices: state.config_input_devices.clone(),
                     selected_input_device: state.config_selected_input_device.clone(),
                     global_hotkey: state.config_global_hotkey.clone(),
@@ -2281,33 +2266,53 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
     ]
     .spacing(4);
 
-    let window_secs_input = text_input("Window seconds", &sf.window_secs)
-        .style(borderless_input)
-        .padding(10)
-        .on_input(Message::WindowSecondsChanged);
+    let window_secs_slider = row![
+        slider(1.0..=10.0, sf.window_secs, Message::WindowSecondsChanged).step(0.5),
+        text(format!("{:.1}", sf.window_secs))
+            .size(12)
+            .color(TEXT_COLOR)
+            .width(35),
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center);
 
-    let overlap_secs_input = text_input("Overlap seconds", &sf.overlap_secs)
-        .style(borderless_input)
-        .padding(10)
-        .on_input(Message::OverlapSecondsChanged);
+    let overlap_secs_slider = row![
+        slider(0.0..=2.0, sf.overlap_secs, Message::OverlapSecondsChanged).step(0.05),
+        text(format!("{:.2}", sf.overlap_secs))
+            .size(12)
+            .color(TEXT_COLOR)
+            .width(35),
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center);
 
-    let silence_thresh_input = text_input("Silence threshold", &sf.silence_thresh)
-        .style(borderless_input)
-        .padding(10)
-        .on_input(Message::SilenceThresholdChanged);
+    let silence_thresh_slider = row![
+        slider(
+            0.001..=0.05,
+            sf.silence_thresh,
+            Message::SilenceThresholdChanged
+        )
+        .step(0.001),
+        text(format!("{:.3}", sf.silence_thresh))
+            .size(12)
+            .color(TEXT_COLOR)
+            .width(35),
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center);
 
     let transcriber_card = column![
         text("Transcriber").size(15).color(TEXT_COLOR),
         model_section,
-        column![text("Window (s)").size(11).color(MUTED), window_secs_input].spacing(4),
+        column![text("Window (s)").size(11).color(MUTED), window_secs_slider].spacing(4),
         column![
             text("Overlap (s)").size(11).color(MUTED),
-            overlap_secs_input
+            overlap_secs_slider
         ]
         .spacing(4),
         column![
             text("Silence Threshold").size(11).color(MUTED),
-            silence_thresh_input
+            silence_thresh_slider
         ]
         .spacing(4),
     ]
