@@ -19,8 +19,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Hides the application window and returns focus to the previously active app.
-/// The app remains running in the background with the global hotkey active.
+/// Hides the application and returns focus to the previously active app.
 #[cfg(target_os = "macos")]
 fn hide_app() {
     use objc2_app_kit::NSApplication;
@@ -693,7 +692,6 @@ enum Message {
     CopyHistoryEntry(usize),
     ShowErrorDetail,
     DismissError,
-    HideApp,
     Shutdown,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
     WindowOpened(window::Id),
@@ -1141,10 +1139,6 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_hotkey_listening = false;
             Task::none()
         }
-        Message::HideApp => {
-            hide_app();
-            Task::none()
-        }
         Message::Shutdown => {
             state.send_event(AppEventKind::UiShutdown);
             iced::exit()
@@ -1375,10 +1369,6 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     update(state, Message::Undo)
                 }
                 keyboard::Key::Character(ref c) if c.as_str() == "w" && modifiers.command() => {
-                    hide_app();
-                    Task::none()
-                }
-                keyboard::Key::Character(ref c) if c.as_str() == "q" && modifiers.command() => {
                     hide_app();
                     Task::none()
                 }
@@ -1835,11 +1825,11 @@ fn view_main<'a>(
     char_count: usize,
     has_api_key: bool,
 ) -> Element<'a, Message> {
-    // minimize: E15B (hide app to background)
-    let close_btn = button(icon('\u{E15B}', 20.0))
+    // close: E5CD
+    let close_btn = button(icon('\u{E5CD}', 20.0))
         .style(icon_btn)
         .padding(6)
-        .on_press(Message::HideApp);
+        .on_press(Message::Shutdown);
 
     let top_bar =
         container(row![container(close_btn).align_right(Fill)].align_y(iced::Alignment::Center))
