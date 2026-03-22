@@ -67,7 +67,7 @@ Example:
 ```yaml
 log_level: debug
 log_path: /tmp/arai.log
-global_hotkey: CmdOrCtrl+Shift+A
+global_hotkey: Alt+Space
 default_prompt: 0
 input_device: MacBook Pro Microphone
 agent_prompts:
@@ -91,7 +91,7 @@ transcriber:
 |---|---|---|
 | `log_level` | `debug` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`, `off`. |
 | `log_path` | `~/Library/Logs/arai.log` (macOS) | Path to the log file. |
-| `global_hotkey` | `CmdOrCtrl+Shift+A` | System-wide hotkey to toggle listening. Uses [global-hotkey](https://docs.rs/global-hotkey) syntax (e.g. `CmdOrCtrl+Shift+A`, `Alt+Space`). |
+| `global_hotkey` | `Alt+Space` | System-wide hotkey to toggle listening. Uses [global-hotkey](https://docs.rs/global-hotkey) syntax (e.g. `Alt+Space`, `CmdOrCtrl+Shift+A`). |
 | `default_prompt` | `0` | Index of the active agent prompt (zero-based). |
 | `input_device` | System default | Name of the audio input device. Set this to avoid Bluetooth headphones switching from A2DP (stereo) to HFP (mono) when the mic activates. |
 | `agent_prompts` | See below | List of prompt instructions. Each entry has a `name` and an `instruction`. At least one prompt is required. |
@@ -106,14 +106,6 @@ transcriber:
 The default agent prompt is:
 
 > Rewrite the user text for clarity and brevity while preserving meaning.
-
-### Environment Variables
-
-| Variable | Description |
-|---|---|
-| `OPENAI_API_KEY` | OpenAI API key. Takes priority over keyring and config file. |
-| `ARAI_LOG_LEVEL` | Overrides `log_level` from config file. |
-| `ARAI_LOG_PATH` | Overrides `log_path` from config file. |
 
 ### API Key Storage
 
@@ -143,20 +135,19 @@ Models are downloaded from Hugging Face and stored in `~/.local/share/arai/model
 
 | Keybinding | Action |
 |---|---|
-| `Cmd+Shift+A` (default, configurable) | Toggle listening on/off from anywhere |
+| `Option+Space` (default, configurable) | Toggle listening on/off from anywhere |
 
 ### In-App
 
 | Keybinding | Action |
 |---|---|
 | `Enter` | Submit text for transformation |
-| `Cmd+Enter` | Copy result to clipboard |
+| `Ctrl+Enter` | Copy result to clipboard |
 | `Cmd+C` | Copy result to clipboard |
 | `Cmd+Z` | Undo |
 | `Cmd+Shift+Z` | Redo |
 | `Cmd+W` | Hide window |
-| `Cmd+1` through `Cmd+9` | Switch to prompt 1-9 |
-| `Cmd+0` | Switch to last prompt |
+| `Cmd+1` through `Cmd+9` | Switch to instruction 1-9 |
 | `Shift+Enter` | Insert newline in editor |
 | `Escape` | Close settings panel / cancel hotkey capture |
 

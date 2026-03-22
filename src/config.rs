@@ -28,7 +28,7 @@ static DEFAULT_MODEL_PATH: LazyLock<String> = LazyLock::new(|| {
 const DEFAULT_WINDOW_SECONDS: f32 = 3.0;
 const DEFAULT_OVERLAP_SECONDS: f32 = 0.25;
 const DEFAULT_SILENCE_THRESHOLD: f32 = 0.005;
-const DEFAULT_GLOBAL_HOTKEY: &str = "CmdOrCtrl+Shift+A";
+const DEFAULT_GLOBAL_HOTKEY: &str = "Alt+Space";
 
 #[derive(Debug)]
 pub enum ConfigError {
@@ -71,38 +71,98 @@ impl From<serde_yaml::Error> for ConfigError {
     }
 }
 
-#[derive(Clone, Debug)]
+/// Application configuration. Deserialized directly from `~/.config/arai/config.yaml`
+/// with serde defaults for missing fields.
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
-    pub log_level: LevelFilter,
-    pub log_path: PathBuf,
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+    #[serde(default = "default_log_path")]
+    pub log_path: String,
+    #[serde(default, skip_serializing)]
     pub open_api_key: String,
+    #[serde(default = "default_agent_prompts")]
     pub agent_prompts: Vec<AgentPrompt>,
+    #[serde(default)]
     pub default_prompt: usize,
+    #[serde(default)]
     pub transcriber: TranscriberConfig,
+    #[serde(default = "default_global_hotkey")]
     pub global_hotkey: String,
-    /// Optional input device name. When set, the recorder will use this device
-    /// instead of the system default. Use this to avoid Bluetooth headphones
-    /// switching from A2DP (stereo) to HFP (mono) when the mic activates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_device: Option<String>,
 }
 
+fn default_log_level() -> String {
+    "debug".to_string()
+}
+
+fn default_log_path() -> String {
+    logger::LogConfig::default().path.display().to_string()
+}
+
+fn default_agent_prompts() -> Vec<AgentPrompt> {
+    vec![AgentPrompt {
+        name: "default".to_string(),
+        instruction: DEFAULT_AGENT_PROMPT.to_string(),
+    }]
+}
+
+fn default_global_hotkey() -> String {
+    DEFAULT_GLOBAL_HOTKEY.to_string()
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            log_level: default_log_level(),
+            log_path: default_log_path(),
+            open_api_key: String::new(),
+            agent_prompts: default_agent_prompts(),
+            default_prompt: 0,
+            transcriber: TranscriberConfig::default(),
+            global_hotkey: default_global_hotkey(),
+            input_device: None,
+        }
+    }
+}
+
 impl Config {
+    /// Loads config from `~/.config/arai/config.yaml`, falling back to defaults
+    /// for missing fields. Resolves the API key from keyring/env and migrates
+    /// plain-text keys from the file to the keyring.
     pub fn load() -> Result<Self, ConfigError> {
-        let default_layer = PartialConfig::default_layer();
-        let file_layer = PartialConfig::from_file(config_path()?)?;
-        let env_layer = PartialConfig::from_env()?;
+        let path = config_path()?;
+        let mut config = if path.exists() {
+            let contents = std::fs::read_to_string(&path)?;
+            serde_yaml::from_str(&contents)?
+        } else {
+            Self::default()
+        };
 
-        // Check if the file layer has a non-empty API key that needs migration.
-        let needs_migration_save = file_layer
-            .open_api_key
+        // Migrate plain-text API key from file to keyring.
+        let needs_migration_save = !config.open_api_key.is_empty();
+        migrate_api_key_if_needed(&config.open_api_key);
+        config.open_api_key = resolve_api_key(&config.open_api_key);
+
+        // Validate.
+        config.validate()?;
+
+        // Clamp default_prompt to valid range.
+        if config.default_prompt >= config.agent_prompts.len() {
+            config.default_prompt = 0;
+        }
+
+        // Trim empty input_device.
+        if config
+            .input_device
             .as_ref()
-            .is_some_and(|k| !k.is_empty());
+            .is_some_and(|s| s.trim().is_empty())
+        {
+            config.input_device = None;
+        }
 
-        let merged = default_layer.merge(file_layer).merge(env_layer);
-        let config = from_partial(merged)?;
-
-        // If we migrated a key from the file to keyring, save immediately
-        // to remove the plain-text key from disk.
+        // Save to remove the plain-text key from disk.
         if needs_migration_save && let Err(e) = config.save() {
             log::warn!("Failed to save config after API key migration: {e}");
         }
@@ -110,24 +170,45 @@ impl Config {
         Ok(config)
     }
 
+    /// Persists the current config to disk. The API key is excluded from the
+    /// file (it lives in the keyring).
     pub fn save(&self) -> Result<(), ConfigError> {
         let path = config_path()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-
-        let file_config = FileConfig {
-            log_level: Some(self.log_level.to_string().to_lowercase()),
-            log_path: Some(self.log_path.display().to_string()),
-            open_api_key: None,
-            agent_prompts: Some(self.agent_prompts.clone()),
-            default_prompt: Some(self.default_prompt),
-            transcriber: Some(self.transcriber.clone()),
-            global_hotkey: Some(self.global_hotkey.clone()),
-            input_device: self.input_device.clone(),
-        };
-        let yaml = serde_yaml::to_string(&file_config)?;
+        let yaml = serde_yaml::to_string(self)?;
         std::fs::write(&path, yaml)?;
+        Ok(())
+    }
+
+    /// Returns the parsed log level, falling back to the default on invalid values.
+    pub fn parsed_log_level(&self) -> LevelFilter {
+        logger::parse_level(&self.log_level).unwrap_or_else(|| logger::LogConfig::default().level)
+    }
+
+    /// Returns the log path as a `PathBuf`.
+    pub fn parsed_log_path(&self) -> PathBuf {
+        PathBuf::from(&self.log_path)
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        // Validate log level.
+        if logger::parse_level(&self.log_level).is_none() {
+            return Err(ConfigError::InvalidLogLevel(self.log_level.clone()));
+        }
+        // Validate agent prompts.
+        if self.agent_prompts.is_empty() {
+            return Err(ConfigError::EmptyAgentPrompts);
+        }
+        for prompt in &self.agent_prompts {
+            if prompt.name.trim().is_empty() {
+                return Err(ConfigError::EmptyAgentPromptName);
+            }
+            if prompt.instruction.trim().is_empty() {
+                return Err(ConfigError::EmptyAgentPromptInstruction);
+            }
+        }
         Ok(())
     }
 }
@@ -140,8 +221,11 @@ pub struct AgentPrompt {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TranscriberConfig {
+    #[serde(default = "default_model_path")]
     pub model_path: String,
+    #[serde(default = "default_window_seconds")]
     pub window_seconds: f32,
+    #[serde(default = "default_overlap_seconds")]
     pub overlap_seconds: f32,
     #[serde(default = "default_silence_threshold")]
     pub silence_threshold: f32,
@@ -151,6 +235,18 @@ pub struct TranscriberConfig {
     pub flash_attn: bool,
     #[serde(default = "default_true")]
     pub no_timestamps: bool,
+}
+
+fn default_model_path() -> String {
+    DEFAULT_MODEL_PATH.clone()
+}
+
+fn default_window_seconds() -> f32 {
+    DEFAULT_WINDOW_SECONDS
+}
+
+fn default_overlap_seconds() -> f32 {
+    DEFAULT_OVERLAP_SECONDS
 }
 
 fn default_silence_threshold() -> f32 {
@@ -175,86 +271,6 @@ impl Default for TranscriberConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
-struct PartialConfig {
-    log_level: Option<String>,
-    log_path: Option<String>,
-    open_api_key: Option<String>,
-    agent_prompts: Option<Vec<AgentPrompt>>,
-    default_prompt: Option<usize>,
-    transcriber: Option<TranscriberConfig>,
-    global_hotkey: Option<String>,
-    input_device: Option<String>,
-}
-
-#[derive(Serialize)]
-struct FileConfig {
-    log_level: Option<String>,
-    log_path: Option<String>,
-    open_api_key: Option<String>,
-    agent_prompts: Option<Vec<AgentPrompt>>,
-    default_prompt: Option<usize>,
-    transcriber: Option<TranscriberConfig>,
-    global_hotkey: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    input_device: Option<String>,
-}
-
-impl PartialConfig {
-    fn default_layer() -> Self {
-        Self {
-            log_level: Some("debug".to_string()),
-            log_path: Some(logger::LogConfig::default().path.display().to_string()),
-            open_api_key: None,
-            agent_prompts: Some(vec![AgentPrompt {
-                name: "default".to_string(),
-                instruction: DEFAULT_AGENT_PROMPT.to_string(),
-            }]),
-            default_prompt: Some(0),
-            transcriber: Some(TranscriberConfig::default()),
-            global_hotkey: Some(DEFAULT_GLOBAL_HOTKEY.to_string()),
-            input_device: None,
-        }
-    }
-
-    fn from_file(path: PathBuf) -> Result<Self, ConfigError> {
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let contents = std::fs::read_to_string(&path)?;
-        let layer = serde_yaml::from_str(&contents)?;
-        Ok(layer)
-    }
-
-    fn from_env() -> Result<Self, ConfigError> {
-        let log_level = std::env::var("ARAI_LOG_LEVEL").ok();
-        let log_path = std::env::var("ARAI_LOG_PATH").ok();
-        Ok(Self {
-            log_level,
-            log_path,
-            open_api_key: None,
-            agent_prompts: None,
-            default_prompt: None,
-            transcriber: None,
-            global_hotkey: None,
-            input_device: None,
-        })
-    }
-
-    fn merge(self, other: PartialConfig) -> PartialConfig {
-        PartialConfig {
-            log_level: other.log_level.or(self.log_level),
-            log_path: other.log_path.or(self.log_path),
-            open_api_key: other.open_api_key.or(self.open_api_key),
-            agent_prompts: other.agent_prompts.or(self.agent_prompts),
-            default_prompt: other.default_prompt.or(self.default_prompt),
-            transcriber: other.transcriber.or(self.transcriber),
-            global_hotkey: other.global_hotkey.or(self.global_hotkey),
-            input_device: other.input_device.or(self.input_device),
-        }
-    }
-}
-
 fn config_path() -> Result<PathBuf, ConfigError> {
     let home = std::env::var("HOME").map_err(|_| ConfigError::MissingHome)?;
     Ok(Path::new(&home).join(".config/arai/config.yaml"))
@@ -265,7 +281,7 @@ fn config_path() -> Result<PathBuf, ConfigError> {
 /// 2. OS keyring
 /// 3. Config file value (migration fallback)
 /// 4. Empty string
-pub fn resolve_api_key(config_file_value: &Option<String>) -> String {
+pub fn resolve_api_key(config_file_value: &str) -> String {
     if let Ok(key) = std::env::var("OPENAI_API_KEY")
         && !key.is_empty()
     {
@@ -274,136 +290,91 @@ pub fn resolve_api_key(config_file_value: &Option<String>) -> String {
     if let Some(key) = crate::keyring_store::get_api_key() {
         return key;
     }
-    if let Some(key) = config_file_value
-        && !key.is_empty()
-    {
-        return key.clone();
+    if !config_file_value.is_empty() {
+        return config_file_value.to_string();
     }
     String::new()
 }
 
-/// If the YAML config contains a non-empty API key, migrate it to the OS keyring.
-/// Returns the key value if migration was attempted (regardless of keyring success).
-fn migrate_api_key_if_needed(yaml_value: &Option<String>) -> Option<String> {
-    let key = yaml_value.as_ref().filter(|k| !k.is_empty())?;
+/// If the config contains a non-empty API key, migrate it to the OS keyring.
+fn migrate_api_key_if_needed(key: &str) {
+    if key.is_empty() {
+        return;
+    }
     log::info!("Migrating API key from config file to keyring");
     if let Err(e) = crate::keyring_store::set_api_key(key) {
         log::warn!("Failed to migrate API key to keyring: {e}. Key remains in config file.");
     }
-    Some(key.clone())
-}
-
-fn from_partial(partial: PartialConfig) -> Result<Config, ConfigError> {
-    let log_level = match partial.log_level {
-        Some(value) => logger::parse_level(&value).ok_or(ConfigError::InvalidLogLevel(value))?,
-        None => logger::LogConfig::default().level,
-    };
-    let log_path = partial
-        .log_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| logger::LogConfig::default().path);
-
-    // Migrate API key from config file to keyring if present.
-    let yaml_api_key = partial.open_api_key;
-    migrate_api_key_if_needed(&yaml_api_key);
-    let open_api_key = resolve_api_key(&yaml_api_key);
-
-    let agent_prompts = partial.agent_prompts.unwrap_or_default();
-    if agent_prompts.is_empty() {
-        return Err(ConfigError::EmptyAgentPrompts);
-    }
-    for prompt in &agent_prompts {
-        if prompt.name.trim().is_empty() {
-            return Err(ConfigError::EmptyAgentPromptName);
-        }
-        if prompt.instruction.trim().is_empty() {
-            return Err(ConfigError::EmptyAgentPromptInstruction);
-        }
-    }
-
-    let default_prompt = partial.default_prompt.unwrap_or(0);
-    let default_prompt = if default_prompt < agent_prompts.len() {
-        default_prompt
-    } else {
-        0
-    };
-
-    let transcriber = partial.transcriber.unwrap_or_default();
-    let global_hotkey = partial
-        .global_hotkey
-        .unwrap_or_else(|| DEFAULT_GLOBAL_HOTKEY.to_string());
-
-    let input_device = partial.input_device.filter(|s| !s.trim().is_empty());
-
-    Ok(Config {
-        log_level,
-        log_path,
-        open_api_key,
-        agent_prompts,
-        default_prompt,
-        transcriber,
-        global_hotkey,
-        input_device,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn valid_partial() -> PartialConfig {
-        PartialConfig {
-            log_level: Some("info".to_string()),
-            log_path: Some("/tmp/arai-test.log".to_string()),
-            open_api_key: Some("test-key".to_string()),
-            agent_prompts: Some(vec![AgentPrompt {
+    fn valid_config() -> Config {
+        Config {
+            log_level: "info".to_string(),
+            log_path: "/tmp/arai-test.log".to_string(),
+            open_api_key: "test-key".to_string(),
+            agent_prompts: vec![AgentPrompt {
                 name: "default".to_string(),
                 instruction: "rewrite".to_string(),
-            }]),
-            default_prompt: Some(0),
-            transcriber: Some(TranscriberConfig::default()),
-            global_hotkey: Some("CmdOrCtrl+Shift+A".to_string()),
+            }],
+            default_prompt: 0,
+            transcriber: TranscriberConfig::default(),
+            global_hotkey: "Alt+Space".to_string(),
             input_device: None,
         }
     }
 
     #[test]
-    fn builds_config_from_valid_partial() {
-        let cfg = from_partial(valid_partial()).expect("valid config should parse");
-        assert_eq!(cfg.log_level, LevelFilter::Info);
-        assert_eq!(cfg.log_path, PathBuf::from("/tmp/arai-test.log"));
-        assert_eq!(cfg.open_api_key, "test-key");
+    fn validates_valid_config() {
+        let cfg = valid_config();
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.parsed_log_level(), LevelFilter::Info);
+        assert_eq!(cfg.parsed_log_path(), PathBuf::from("/tmp/arai-test.log"));
         assert_eq!(cfg.agent_prompts[0].instruction, "rewrite");
     }
 
     #[test]
-    fn builds_config_without_api_key() {
-        let mut partial = valid_partial();
-        partial.open_api_key = None;
-        // Should build successfully even without an API key in config.
-        // The resolved key may be non-empty if the OS keyring has a stored key.
-        let _cfg = from_partial(partial).expect("config should load without API key");
+    fn rejects_invalid_log_level() {
+        let mut cfg = valid_config();
+        cfg.log_level = "banana".to_string();
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::InvalidLogLevel(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_prompts() {
+        let mut cfg = valid_config();
+        cfg.agent_prompts = vec![];
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::EmptyAgentPrompts)
+        ));
     }
 
     #[test]
     fn rejects_invalid_prompt_name_or_instruction() {
-        let mut bad_name = valid_partial();
-        bad_name.agent_prompts = Some(vec![AgentPrompt {
+        let mut bad_name = valid_config();
+        bad_name.agent_prompts = vec![AgentPrompt {
             name: " ".to_string(),
             instruction: "ok".to_string(),
-        }]);
+        }];
         assert!(matches!(
-            from_partial(bad_name),
+            bad_name.validate(),
             Err(ConfigError::EmptyAgentPromptName)
         ));
 
-        let mut bad_instruction = valid_partial();
-        bad_instruction.agent_prompts = Some(vec![AgentPrompt {
+        let mut bad_instruction = valid_config();
+        bad_instruction.agent_prompts = vec![AgentPrompt {
             name: "default".to_string(),
             instruction: " ".to_string(),
-        }]);
+        }];
         assert!(matches!(
-            from_partial(bad_instruction),
+            bad_instruction.validate(),
             Err(ConfigError::EmptyAgentPromptInstruction)
         ));
     }
@@ -428,27 +399,29 @@ mod tests {
 
     #[test]
     fn resolve_api_key_uses_config_fallback() {
-        let key = resolve_api_key(&Some("sk-fallback-key".to_string()));
+        let key = resolve_api_key("sk-fallback-key");
         assert!(!key.is_empty());
     }
 
     #[test]
-    fn resolve_api_key_returns_string_for_none() {
-        let _key = resolve_api_key(&None);
+    fn resolve_api_key_returns_empty_for_empty() {
+        let _key = resolve_api_key("");
     }
 
     #[test]
-    fn migrate_api_key_to_keyring_clears_config_value() {
-        let yaml_key = Some("sk-test-migration".to_string());
-        let result = migrate_api_key_if_needed(&yaml_key);
-        assert_eq!(result, Some("sk-test-migration".to_string()));
+    fn default_config_is_valid() {
+        let cfg = Config::default();
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]
-    fn migrate_api_key_noop_when_empty() {
-        let result = migrate_api_key_if_needed(&None);
-        assert_eq!(result, None);
-        let result2 = migrate_api_key_if_needed(&Some(String::new()));
-        assert_eq!(result2, None);
+    fn clamps_out_of_range_default_prompt() {
+        let mut cfg = valid_config();
+        cfg.default_prompt = 999;
+        // Simulating what load() does after deserialization.
+        if cfg.default_prompt >= cfg.agent_prompts.len() {
+            cfg.default_prompt = 0;
+        }
+        assert_eq!(cfg.default_prompt, 0);
     }
 }

@@ -1348,7 +1348,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 return Task::none();
             }
             match key {
-                keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.command() => {
+                keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.control() => {
                     update(state, Message::Copy)
                 }
                 keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.is_empty() => {
@@ -1378,12 +1378,12 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                         && c.as_str().as_bytes()[0].is_ascii_digit() =>
                 {
                     let digit = c.as_str().as_bytes()[0] - b'0';
-                    let idx = if digit == 0 {
-                        state.snapshot_prompts.len().saturating_sub(1)
+                    if digit == 0 {
+                        Task::none()
                     } else {
-                        (digit as usize).saturating_sub(1)
-                    };
-                    update(state, Message::SelectActivePrompt(idx))
+                        let idx = (digit as usize).saturating_sub(1);
+                        update(state, Message::SelectActivePrompt(idx))
+                    }
                 }
                 keyboard::Key::Named(keyboard::key::Named::Escape) => {
                     if state.config_hotkey_listening {
@@ -1842,7 +1842,7 @@ fn view_main<'a>(
         .padding(16)
         .height(Fill)
         .key_binding(|key_press| match &key_press.key {
-            keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.command() => {
+            keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.control() => {
                 Some(text_editor::Binding::Custom(Message::Copy))
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.shift() => {
@@ -2106,15 +2106,11 @@ fn view_history(state: &UiRuntime) -> Element<'_, Message> {
             .spacing(8)
             .padding(14);
 
-            let card = container(card_content)
-                .style(history_card)
-                .width(Fill);
+            let card = container(card_content).style(history_card).width(Fill);
 
             entries_col = entries_col.push(card);
         }
-        scrollable(entries_col.padding([0, 14]))
-            .height(Fill)
-            .into()
+        scrollable(entries_col.padding([0, 14])).height(Fill).into()
     };
 
     let content = column![top_bar, body].height(Fill);

@@ -38,7 +38,7 @@ Recorder (cpal) → AudioChunk → Transcriber (whisper) → text → Agent (Ope
 - `agent.rs` — OpenAI gpt-4o-mini calls with exponential backoff retry (429s, 5xx, timeouts)
 - `controller.rs` — Central event loop bridging all components via AppEvent channel
 - `ui.rs` — Iced GUI (480x620, Tokyo Night theme) with text editor, Listen/Submit/Copy buttons
-- `config.rs` — Three-layer config merge: defaults → `~/.config/arai/config.yaml` → env vars (`ARAI_LOG_LEVEL`, `ARAI_LOG_PATH`, `ARAI_OPENAI_API_KEY`)
+- `config.rs` — Config deserialized from `~/.config/arai/config.yaml` with serde defaults; API key resolved from keyring/env
 - `app_state.rs` — Shared mutable state (Arc<Mutex<>>)
 - `messages.rs` — Event types (AudioChunk, AppEvent, AppEventKind)
 - `channels.rs` — Type aliases for mpsc channels
@@ -56,7 +56,7 @@ Recorder (cpal) → AudioChunk → Transcriber (whisper) → text → Agent (Ope
 
 ## Configuration
 
-Config file at `~/.config/arai/config.yaml`. API key is required (via file or `ARAI_OPENAI_API_KEY` env var). Agent prompts list cannot be empty.
+Config file at `~/.config/arai/config.yaml`. API key is stored in the OS keyring (or `OPENAI_API_KEY` env var). Agent prompts list cannot be empty.
 
 # Repository Guidelines
 

@@ -29,8 +29,8 @@ fn main() {
     let api_key_exists = !config.open_api_key.is_empty();
 
     if let Err(err) = logger::init_with_config(logger::LogConfig {
-        level: config.log_level,
-        path: config.log_path.clone(),
+        level: config.parsed_log_level(),
+        path: config.parsed_log_path(),
     }) {
         eprintln!("Failed to init logger: {err}");
     }

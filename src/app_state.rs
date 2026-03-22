@@ -13,22 +13,12 @@ pub struct AppStateSnapshot {
     pub api_key_status: ApiKeyStatus,
 }
 
-/// Internal state protected by a single mutex to guarantee consistent reads
-/// and writes across all fields.
-struct AppStateInner {
-    agent_prompts: Vec<AgentPrompt>,
-    default_prompt: usize,
-    transcriber: TranscriberConfig,
-    config: Config,
-}
-
 /// Shared application state.
 ///
-/// All mutable fields live inside a single `Mutex<AppStateInner>` so that
-/// every read or write sees a consistent view — no window where
-/// `default_prompt` can point past the end of `agent_prompts`.
+/// Holds a single `Config` behind a mutex. All reads and writes go through
+/// the config directly — no duplicated fields.
 pub struct AppState {
-    inner: Mutex<AppStateInner>,
+    inner: Mutex<Config>,
 }
 
 pub type AppStateHandle = Arc<AppState>;
@@ -58,64 +48,53 @@ fn compute_api_key_status(key: &str) -> ApiKeyStatus {
 
 impl AppState {
     pub fn new(config: Config) -> AppStateHandle {
-        let prompts = config.agent_prompts.clone();
-        let default = config.default_prompt;
-        let transcriber = config.transcriber.clone();
         Arc::new(Self {
-            inner: Mutex::new(AppStateInner {
-                agent_prompts: prompts,
-                default_prompt: default,
-                transcriber,
-                config,
-            }),
+            inner: Mutex::new(config),
         })
     }
 
     pub fn snapshot(&self) -> AppStateSnapshot {
-        let inner = self.inner.lock().expect("app_state mutex poisoned");
+        let config = self.inner.lock().expect("app_state mutex poisoned");
         AppStateSnapshot {
-            agent_prompts: inner.agent_prompts.clone(),
-            default_prompt: inner.default_prompt,
-            transcriber: inner.transcriber.clone(),
-            input_device: inner.config.input_device.clone(),
-            global_hotkey: inner.config.global_hotkey.clone(),
-            api_key_status: compute_api_key_status(&inner.config.open_api_key),
+            agent_prompts: config.agent_prompts.clone(),
+            default_prompt: config.default_prompt,
+            transcriber: config.transcriber.clone(),
+            input_device: config.input_device.clone(),
+            global_hotkey: config.global_hotkey.clone(),
+            api_key_status: compute_api_key_status(&config.open_api_key),
         }
     }
 
     pub fn update_prompts(&self, prompts: Vec<AgentPrompt>, default: usize) {
-        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
+        let mut config = self.inner.lock().expect("app_state mutex poisoned");
         let clamped = if default < prompts.len() { default } else { 0 };
-        inner.agent_prompts = prompts.clone();
-        inner.default_prompt = clamped;
-        inner.config.agent_prompts = prompts;
-        inner.config.default_prompt = clamped;
-        if let Err(e) = inner.config.save() {
+        config.agent_prompts = prompts;
+        config.default_prompt = clamped;
+        if let Err(e) = config.save() {
             log::error!("Failed to save config: {e}");
         }
     }
 
     pub fn update_transcriber(&self, transcriber_config: TranscriberConfig) {
-        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
-        inner.transcriber = transcriber_config.clone();
-        inner.config.transcriber = transcriber_config;
-        if let Err(e) = inner.config.save() {
+        let mut config = self.inner.lock().expect("app_state mutex poisoned");
+        config.transcriber = transcriber_config;
+        if let Err(e) = config.save() {
             log::error!("Failed to save config: {e}");
         }
     }
 
     pub fn update_input_device(&self, device: Option<String>) {
-        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
-        inner.config.input_device = device;
-        if let Err(e) = inner.config.save() {
+        let mut config = self.inner.lock().expect("app_state mutex poisoned");
+        config.input_device = device;
+        if let Err(e) = config.save() {
             log::error!("Failed to save config: {e}");
         }
     }
 
     pub fn update_global_hotkey(&self, hotkey: String) {
-        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
-        inner.config.global_hotkey = hotkey;
-        if let Err(e) = inner.config.save() {
+        let mut config = self.inner.lock().expect("app_state mutex poisoned");
+        config.global_hotkey = hotkey;
+        if let Err(e) = config.save() {
             log::error!("Failed to save config: {e}");
         }
     }
@@ -124,14 +103,14 @@ impl AppState {
     /// the key is persisted via keyring, not YAML.
     #[allow(dead_code)]
     pub fn update_api_key(&self, key: String) {
-        let mut inner = self.inner.lock().expect("app_state mutex poisoned");
-        inner.config.open_api_key = key;
+        let mut config = self.inner.lock().expect("app_state mutex poisoned");
+        config.open_api_key = key;
     }
 
     /// Returns a clone of the current transcriber configuration.
     pub fn transcriber_config(&self) -> TranscriberConfig {
-        let inner = self.inner.lock().expect("app_state mutex poisoned");
-        inner.transcriber.clone()
+        let config = self.inner.lock().expect("app_state mutex poisoned");
+        config.transcriber.clone()
     }
 }
 
@@ -141,8 +120,8 @@ mod tests {
 
     fn test_config() -> Config {
         Config {
-            log_level: log::LevelFilter::Debug,
-            log_path: std::path::PathBuf::from("/tmp/test.log"),
+            log_level: "debug".to_string(),
+            log_path: "/tmp/test.log".to_string(),
             open_api_key: "test-key".to_string(),
             agent_prompts: vec![AgentPrompt {
                 name: "default".to_string(),
@@ -150,7 +129,7 @@ mod tests {
             }],
             default_prompt: 0,
             transcriber: TranscriberConfig::default(),
-            global_hotkey: "CmdOrCtrl+Shift+A".to_string(),
+            global_hotkey: "Alt+Space".to_string(),
             input_device: None,
         }
     }
@@ -177,8 +156,8 @@ mod tests {
     fn update_api_key_changes_runtime_value() {
         let state = AppState::new(test_config());
         state.update_api_key("sk-new-key".to_string());
-        let inner = state.inner.lock().unwrap();
-        assert_eq!(inner.config.open_api_key, "sk-new-key");
+        let config = state.inner.lock().unwrap();
+        assert_eq!(config.open_api_key, "sk-new-key");
     }
 
     #[test]
