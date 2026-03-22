@@ -1,35 +1,29 @@
 # Development
 
-This guide covers local setup, running, building, and testing ARAI.
+This guide covers local setup, running, building, and testing Arai.
 
 ## Prerequisites
 
-- Rust stable toolchain (`cargo`, `rustc`)
-- Whisper model file (default path: `models/ggml-small.en.bin`)
+- Rust stable toolchain (`cargo`, `rustc`) -- install via [rustup](https://rustup.rs/)
 - OpenAI API key
+- macOS (primary target; uses Metal for GPU acceleration and Keychain for key storage)
 
 ## Setup
 
-1. Clone the repository.
-2. Create config file:
+1. Clone the repository:
 
 ```bash
-mkdir -p ~/.config/arai
-cat > ~/.config/arai/config.yaml <<'YAML'
-log_level: debug
-log_path: /tmp/arai.log
-open_api_key: YOUR_OPENAI_API_KEY
-agent_prompts:
-  - name: default
-    instruction: Rewrite the user text for clarity and brevity while preserving meaning.
-YAML
+git clone https://github.com/mkoltun/arai.git
+cd arai
 ```
 
-You can also provide the key via env var:
+2. Set your OpenAI API key via one of:
 
-```bash
-export ARAI_OPENAI_API_KEY=YOUR_OPENAI_API_KEY
-```
+   - **Environment variable:** `export OPENAI_API_KEY=sk-...`
+   - **In-app settings:** enter it through the UI on first launch
+   - **Config file:** `~/.config/arai/config.yaml` (will be migrated to Keychain automatically)
+
+3. On first launch, Arai will prompt you to download a Whisper model.
 
 ## Run
 
@@ -40,8 +34,8 @@ cargo run
 ## Build
 
 ```bash
-cargo build
-cargo build --release
+cargo build           # debug build
+cargo build --release # optimized build
 ```
 
 ## Tests
@@ -52,7 +46,7 @@ Run all tests:
 cargo test
 ```
 
-Run module-specific tests (non-UI / non-recorder):
+Run module-specific tests:
 
 ```bash
 cargo test agent::tests
@@ -63,9 +57,17 @@ cargo test transcriber::tests
 cargo test stdin_listener::tests
 ```
 
-## Lint/Format
+UI and recorder modules are out of scope for unit tests.
+
+## Lint / Format
 
 ```bash
 cargo fmt
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+Clippy warnings are treated as errors.
+
+## Project Structure
+
+All modules live flat under `src/`. See the main [README](./README.md) for configuration details and keybindings.

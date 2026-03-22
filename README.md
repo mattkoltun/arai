@@ -1,60 +1,173 @@
-# ARAI
+# Arai
 
-ARAI is a voice-first prompt and writing assistant designed to improve human workflows with AI agents.
+Arai is a voice-first prompt and writing assistant. It captures microphone audio, transcribes it locally via Whisper, then transforms the text through OpenAI's API. The result is polished text ready for use in agent prompts, emails, messages, and more.
 
-Instead of typing long instructions, an operator can speak naturally, include rich context, and quickly produce a clean, structured output that is ready to use.
+## Installation
 
-## Why ARAI exists
+### From GitHub Releases
 
-Typing can be slow when you need to provide detailed context to an AI system. ARAI was built to make that process faster and easier by turning spoken thoughts into high-quality text.
+Download the latest release from the [Releases](https://github.com/mkoltun/arai/releases) page. On macOS, drag `Arai.app` to your Applications folder.
 
-Its primary goal is to improve workflows where humans collaborate with agents, but it is not limited to agent prompting.
+### From Source
 
-## How it works
+Requires the [Rust toolchain](https://rustup.rs/) (stable).
 
-ARAI uses a two-stage pipeline:
+```bash
+git clone https://github.com/mkoltun/arai.git
+cd arai
+cargo install --path .
+```
 
-1. **Speech → text transcription**
-   - Audio is captured from the microphone.
-   - A local speech model (or configured model path) transcribes speech into text.
+## Building
 
-2. **Text → polished output transformation**
-   - The transcribed text is sent through an LLM transformation step.
-   - The model cleans up, formats, and reshapes the text according to your intent.
+```bash
+cargo build           # debug build
+cargo build --release # optimized build
+```
 
-The result is output that is ready to copy and use in your target workflow.
+To build a macOS app bundle (requires [cargo-bundle](https://github.com/burtonageo/cargo-bundle)):
 
-## What you can use it for
+```bash
+cargo bundle --release
+```
 
-- Prompting AI agents with richer context
-- Drafting formal emails
-- Writing messages
-- Creating document drafts
-- General speech-to-text enhancement workflows
+## Running
 
-## Customizable prompt behavior
+```bash
+cargo run
+```
 
-ARAI supports configurable prompt instructions.
+On first launch, Arai will prompt you to download a Whisper model and enter your OpenAI API key if they are not already configured.
 
-That means you can control the style and target of each transformation, for example:
+## Tests
 
-- Formal business email
-- Engineering prompt for an autonomous coding agent
-- Team status update
-- Any other custom output format
+```bash
+cargo test                          # run all tests
+cargo test agent::tests             # agent module
+cargo test app_state::tests         # app state module
+cargo test config::tests            # config module
+cargo test logger::tests            # logger module
+cargo test transcriber::tests       # transcriber module
+cargo test stdin_listener::tests    # stdin listener module
+```
 
-You speak once, and ARAI adapts the transformed output to your selected style.
+Lint and format:
 
-## Development
+```bash
+cargo fmt
+cargo clippy --all-targets --all-features -- -D warnings
+```
 
-For local setup, build, and testing instructions, see [DEVELOPMENT.md](./DEVELOPMENT.md).
+## Configuration
 
-## Summary
+Config file location: `~/.config/arai/config.yaml`
 
-ARAI is a practical workflow accelerator:
+Example:
 
-- speak instead of type,
-- preserve context more naturally,
-- and produce clean, usable text faster.
+```yaml
+log_level: debug
+log_path: /tmp/arai.log
+global_hotkey: CmdOrCtrl+Shift+A
+default_prompt: 0
+input_device: MacBook Pro Microphone
+agent_prompts:
+  - name: default
+    instruction: Rewrite the user text for clarity and brevity while preserving meaning.
+  - name: email
+    instruction: Rewrite the user text as a professional email.
+transcriber:
+  model_path: ~/.local/share/arai/models/ggml-small.en.bin
+  window_seconds: 3.0
+  overlap_seconds: 0.25
+  silence_threshold: 0.005
+  use_gpu: true
+  flash_attn: true
+  no_timestamps: true
+```
 
-It is especially useful for AI-assisted work, but flexible enough for any voice-to-text refinement task.
+### Config Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `log_level` | `debug` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`, `off`. |
+| `log_path` | `~/Library/Logs/arai.log` (macOS) | Path to the log file. |
+| `global_hotkey` | `CmdOrCtrl+Shift+A` | System-wide hotkey to toggle listening. Uses [global-hotkey](https://docs.rs/global-hotkey) syntax (e.g. `CmdOrCtrl+Shift+A`, `Alt+Space`). |
+| `default_prompt` | `0` | Index of the active agent prompt (zero-based). |
+| `input_device` | System default | Name of the audio input device. Set this to avoid Bluetooth headphones switching from A2DP (stereo) to HFP (mono) when the mic activates. |
+| `agent_prompts` | See below | List of prompt instructions. Each entry has a `name` and an `instruction`. At least one prompt is required. |
+| `transcriber.model_path` | `~/.local/share/arai/models/ggml-small.en.bin` | Path to the Whisper GGML model file. |
+| `transcriber.window_seconds` | `3.0` | Audio window size in seconds for transcription. |
+| `transcriber.overlap_seconds` | `0.25` | Overlap between consecutive audio windows. |
+| `transcriber.silence_threshold` | `0.005` | Amplitude below which audio is considered silence. |
+| `transcriber.use_gpu` | `true` | Enable GPU acceleration (Metal on macOS). |
+| `transcriber.flash_attn` | `true` | Enable flash attention for faster inference. |
+| `transcriber.no_timestamps` | `true` | Disable timestamp tokens in Whisper output. |
+
+The default agent prompt is:
+
+> Rewrite the user text for clarity and brevity while preserving meaning.
+
+### Environment Variables
+
+| Variable | Description |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI API key. Takes priority over keyring and config file. |
+| `ARAI_LOG_LEVEL` | Overrides `log_level` from config file. |
+| `ARAI_LOG_PATH` | Overrides `log_path` from config file. |
+
+### API Key Storage
+
+Arai stores the OpenAI API key in the macOS Keychain via the system keyring. If a key is found in the config file, it is automatically migrated to the keyring and removed from the file. Priority order:
+
+1. `OPENAI_API_KEY` environment variable
+2. macOS Keychain (service: `arai`, account: `openai_api_key`)
+3. Config file value (migration fallback)
+
+### Whisper Models
+
+On first launch, Arai prompts you to download a model. Available models:
+
+| Model | Size | Description |
+|---|---|---|
+| Tiny (English) | ~75 MB | Fastest, least accurate |
+| Base (English) | ~142 MB | Fast, decent accuracy |
+| Small (English) | ~487 MB | Good balance (recommended) |
+| Medium (English) | ~1.5 GB | High accuracy, slower |
+| Large | ~1.5 GB | Best accuracy, multilingual |
+
+Models are downloaded from Hugging Face and stored in `~/.local/share/arai/models/`.
+
+## Keybindings
+
+### Global
+
+| Keybinding | Action |
+|---|---|
+| `Cmd+Shift+A` (default, configurable) | Toggle listening on/off from anywhere |
+
+### In-App
+
+| Keybinding | Action |
+|---|---|
+| `Enter` | Submit text for transformation |
+| `Cmd+Enter` | Copy result to clipboard |
+| `Cmd+C` | Copy result to clipboard |
+| `Cmd+Z` | Undo |
+| `Cmd+Shift+Z` | Redo |
+| `Cmd+W` | Hide window |
+| `Cmd+1` through `Cmd+9` | Switch to prompt 1-9 |
+| `Cmd+0` | Switch to last prompt |
+| `Shift+Enter` | Insert newline in editor |
+| `Escape` | Close settings panel / cancel hotkey capture |
+
+## macOS Permissions
+
+Arai requires the following macOS permissions:
+
+- **Microphone** -- Required for capturing audio. macOS will prompt for permission on first use. Arai declares `NSMicrophoneUsageDescription` in its app bundle.
+- **Keychain** -- Used to securely store and retrieve your OpenAI API key. macOS may prompt you to allow keychain access when Arai reads or writes the key.
+- **Accessibility** (optional) -- The global hotkey may require accessibility permissions depending on your macOS version and security settings. Grant access in System Settings > Privacy & Security > Accessibility if the hotkey does not work.
+
+## License
+
+MIT -- see [LICENSE](./LICENSE).
