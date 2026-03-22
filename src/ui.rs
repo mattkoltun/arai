@@ -1872,7 +1872,7 @@ fn view_main<'a>(
 
     // mic: E029=mic, E02B=mic_off
     let mic_btn = if listening {
-        button(icon('\u{E02B}', 22.0))
+        button(icon('\u{E029}', 22.0))
             .style(icon_btn_active)
             .padding([8, 12])
             .on_press(Message::ToggleListen)
@@ -1894,7 +1894,7 @@ fn view_main<'a>(
             .on_press_maybe((!processing).then_some(Message::ToggleListen))
     };
 
-    // send: E163
+    // magic wand (auto_fix_high): E663
     let send_btn = if processing {
         // Pulsate the send icon red while processing.
         let t = state.pulse_phase.sin() * 0.5 + 0.5; // 0.0 – 1.0
@@ -1903,11 +1903,11 @@ fn view_main<'a>(
             0.149 * t + 0.10 * (1.0 - t), // green channel
             0.447 * t + 0.15 * (1.0 - t), // blue channel
         );
-        button(icon('\u{E163}', 22.0).color(pulse_color))
+        button(icon('\u{E663}', 22.0).color(pulse_color))
             .style(icon_btn)
             .padding([8, 12])
     } else {
-        button(icon('\u{E163}', 22.0))
+        button(icon('\u{E663}', 22.0))
             .style(icon_btn)
             .padding([8, 12])
             .on_press_maybe((!busy && has_text && has_api_key).then_some(Message::Submit))
