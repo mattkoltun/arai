@@ -39,20 +39,6 @@ fn build_error_info(source_name: &str, message: &str) -> ErrorInfo {
     }
 }
 
-/// Lightweight handle that allows external code (e.g. main) to signal shutdown
-/// without holding the entire Controller behind an Arc.
-pub struct ShutdownHandle {
-    flag: Arc<AtomicBool>,
-}
-
-impl ShutdownHandle {
-    /// Signals the Controller's run loop to stop.
-    pub fn shutdown(&self) {
-        info!("Controller shutdown requested");
-        self.flag.store(true, Ordering::SeqCst);
-    }
-}
-
 pub struct Controller {
     recorder: Recorder,
     transcriber: Transcriber,
@@ -66,8 +52,9 @@ pub struct Controller {
 }
 
 impl Controller {
-    /// Creates a Controller and a [`ShutdownHandle`] that can trigger graceful
-    /// shutdown from another thread.
+    /// Creates a Controller that uses the provided `shutdown_flag` to signal
+    /// when the run loop should exit.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         recorder: Recorder,
         transcriber: Transcriber,
@@ -76,10 +63,9 @@ impl Controller {
         agent: Agent,
         app_state: AppStateHandle,
         ui_update_tx: UiUpdateSender,
-    ) -> (Self, ShutdownHandle) {
-        let flag = Arc::new(AtomicBool::new(false));
-        let handle = ShutdownHandle { flag: flag.clone() };
-        let controller = Self {
+        shutdown_flag: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
             recorder,
             transcriber,
             app_event_tx,
@@ -87,10 +73,9 @@ impl Controller {
             agent,
             app_state,
             ui_update_tx,
-            shutting_down: flag,
+            shutting_down: shutdown_flag,
             history: History::new(),
-        };
-        (controller, handle)
+        }
     }
 
     fn start_listening(&mut self) {
