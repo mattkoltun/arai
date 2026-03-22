@@ -131,7 +131,16 @@ fn call_openai_with_retry(
                     err,
                     delay.as_secs()
                 );
-                thread::sleep(delay);
+                // Sleep in short intervals so we can bail quickly on shutdown.
+                let mut remaining = delay;
+                while remaining > Duration::ZERO {
+                    if stop.load(Ordering::SeqCst) {
+                        return Err(err);
+                    }
+                    let step = remaining.min(Duration::from_millis(250));
+                    thread::sleep(step);
+                    remaining = remaining.saturating_sub(step);
+                }
             }
         }
     }

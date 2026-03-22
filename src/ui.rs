@@ -567,6 +567,7 @@ impl Ui {
             .window_size((480.0, 620.0))
             .decorations(false)
             .resizable(false)
+            .exit_on_close_request(false)
             .font(include_bytes!("../assets/fonts/MaterialIcons-Regular.ttf").as_slice())
             .font(include_bytes!("../assets/fonts/Inter-Regular.ttf").as_slice())
             .run()
@@ -693,6 +694,7 @@ enum Message {
     ShowErrorDetail,
     DismissError,
     Shutdown,
+    CloseRequested,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
     WindowOpened(window::Id),
     DragWindow,
@@ -1139,7 +1141,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_hotkey_listening = false;
             Task::none()
         }
-        Message::Shutdown => {
+        Message::Shutdown | Message::CloseRequested => {
             state.send_event(AppEventKind::UiShutdown);
             iced::exit()
         }
@@ -2497,6 +2499,7 @@ fn subscription(state: &UiRuntime) -> Subscription<Message> {
             _ => Message::Tick,
         }),
         window::open_events().map(Message::WindowOpened),
+        window::close_requests().map(|_| Message::CloseRequested),
         Subscription::run_with(UiUpdateBridge(ui_update_rx), ui_update_stream),
     ])
 }

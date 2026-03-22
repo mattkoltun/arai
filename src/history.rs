@@ -25,7 +25,7 @@ pub struct HistoryRecord {
 /// Each call to [`save()`](History::save) sends an entry to the worker thread,
 /// which writes it as a JSON file in `~/.local/share/arai/history/`.
 pub struct History {
-    tx: mpsc::Sender<HistoryEntry>,
+    tx: Option<mpsc::Sender<HistoryEntry>>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -81,14 +81,16 @@ impl History {
             .expect("Failed to spawn history thread");
 
         Self {
-            tx,
+            tx: Some(tx),
             handle: Some(handle),
         }
     }
 
     /// Sends a history entry to the worker thread for writing. Non-blocking.
     pub fn save(&self, text: String, prompt: String) {
-        if let Err(e) = self.tx.send(HistoryEntry { text, prompt }) {
+        if let Some(ref tx) = self.tx
+            && let Err(e) = tx.send(HistoryEntry { text, prompt })
+        {
             error!("Failed to send history entry: {e}");
         }
     }
@@ -96,6 +98,8 @@ impl History {
 
 impl Drop for History {
     fn drop(&mut self) {
+        // Drop the sender first to unblock the worker's recv() call.
+        self.tx.take();
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
