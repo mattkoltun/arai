@@ -31,11 +31,19 @@ cd arai
 cargo run
 ```
 
+On first launch, Arai will prompt you to download a Whisper model and enter your OpenAI API key if they are not already configured.
+
 ## Build
 
 ```bash
 cargo build           # debug build
 cargo build --release # optimized build
+```
+
+To build a macOS app bundle (requires [cargo-bundle](https://github.com/burtonageo/cargo-bundle)):
+
+```bash
+cargo bundle --release
 ```
 
 ## Tests

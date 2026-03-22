@@ -18,45 +18,9 @@ cd arai
 cargo install --path .
 ```
 
-## Building
+## Development
 
-```bash
-cargo build           # debug build
-cargo build --release # optimized build
-```
-
-To build a macOS app bundle (requires [cargo-bundle](https://github.com/burtonageo/cargo-bundle)):
-
-```bash
-cargo bundle --release
-```
-
-## Running
-
-```bash
-cargo run
-```
-
-On first launch, Arai will prompt you to download a Whisper model and enter your OpenAI API key if they are not already configured.
-
-## Tests
-
-```bash
-cargo test                          # run all tests
-cargo test agent::tests             # agent module
-cargo test app_state::tests         # app state module
-cargo test config::tests            # config module
-cargo test logger::tests            # logger module
-cargo test transcriber::tests       # transcriber module
-cargo test stdin_listener::tests    # stdin listener module
-```
-
-Lint and format:
-
-```bash
-cargo fmt
-cargo clippy --all-targets --all-features -- -D warnings
-```
+For building, running, testing, and local setup instructions, see [DEVELOPMENT.md](./DEVELOPMENT.md).
 
 ## Configuration
 
