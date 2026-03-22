@@ -73,8 +73,17 @@ input_device: MacBook Pro Microphone
 agent_prompts:
   - name: default
     instruction: Rewrite the user text for clarity and brevity while preserving meaning.
-  - name: email
-    instruction: Rewrite the user text as a professional email.
+  - name: agent prompt
+    instruction: >-
+      Rewrite the user text as a structured prompt for an autonomous coding agent.
+      Use a "Motivation" section explaining why the change is needed, followed by
+      a "Requirements" section with a numbered list of concrete, actionable items.
+      Be precise and unambiguous. Do not include conversational filler.
+  - name: shell command
+    instruction: >-
+      Convert the user text into a single shell command or short pipeline that
+      accomplishes what was described. Output only the command, with no explanation
+      or surrounding text. It should be ready to copy and paste into a terminal.
 transcriber:
   model_path: ~/.local/share/arai/models/ggml-small.en.bin
   window_seconds: 3.0
