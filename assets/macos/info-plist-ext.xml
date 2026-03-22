@@ -1,2 +1,4 @@
 <key>NSMicrophoneUsageDescription</key>
 <string>Arai needs microphone access to capture and transcribe your voice.</string>
+<key>LSUIElement</key>
+<true/>
