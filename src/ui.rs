@@ -2279,13 +2279,6 @@ fn view_instructions_tab<'a>(
 }
 
 fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
-    let gpu_toggle = toggler(state.config_use_gpu)
-        .label("GPU Acceleration")
-        .on_toggle(Message::UseGpuToggled)
-        .text_size(13)
-        .spacing(10)
-        .size(20);
-
     let flash_attn_toggle = toggler(state.config_flash_attn)
         .label("Flash Attention")
         .on_toggle(Message::FlashAttnToggled)
@@ -2300,17 +2293,34 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
         .spacing(10)
         .size(20);
 
-    let gpu_card = column![
+    let mut card = column![
         text("Model Inference")
             .size(15)
             .color(current_palette().text),
-        column![
-            text("Enable Metal GPU for faster inference on Apple Silicon.")
-                .size(11)
-                .color(current_palette().muted),
-            gpu_toggle,
-        ]
-        .spacing(6),
+    ]
+    .spacing(12)
+    .padding(14);
+
+    #[cfg(target_os = "macos")]
+    {
+        let gpu_toggle = toggler(state.config_use_gpu)
+            .label("GPU Acceleration")
+            .on_toggle(Message::UseGpuToggled)
+            .text_size(13)
+            .spacing(10)
+            .size(20);
+        card = card.push(
+            column![
+                text("Enable Metal GPU for faster inference on Apple Silicon.")
+                    .size(11)
+                    .color(current_palette().muted),
+                gpu_toggle,
+            ]
+            .spacing(6),
+        );
+    }
+
+    card = card.push(
         column![
             text("Use flash attention for reduced memory and faster decoding.")
                 .size(11)
@@ -2318,6 +2328,9 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
             flash_attn_toggle,
         ]
         .spacing(6),
+    );
+
+    card = card.push(
         column![
             text("Skip timestamp computation for faster output.")
                 .size(11)
@@ -2325,11 +2338,9 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
             no_timestamps_toggle,
         ]
         .spacing(6),
-    ]
-    .spacing(12)
-    .padding(14);
+    );
 
-    column![container(gpu_card).style(surface_container).width(Fill)]
+    column![container(card).style(surface_container).width(Fill)]
         .spacing(12)
         .padding(14)
 }
