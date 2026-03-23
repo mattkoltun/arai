@@ -41,12 +41,6 @@ fn show_app() {
     app.activateIgnoringOtherApps(true);
 }
 
-#[cfg(not(target_os = "macos"))]
-fn hide_app() {}
-
-#[cfg(not(target_os = "macos"))]
-fn show_app() {}
-
 /// Resolves the active palette from the current theme mode.
 fn active_palette(mode: &ThemeMode, system_dark: bool) -> AppPalette {
     match mode {
@@ -510,6 +504,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
 
             if hotkey_fired {
+                #[cfg(target_os = "macos")]
                 show_app();
                 if let Some(id) = state.window_id {
                     window::gain_focus(id)
@@ -677,8 +672,21 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             });
             state.input.clear();
             state.editor = text_editor::Content::new();
+            #[cfg(target_os = "macos")]
             hide_app();
-            iced::clipboard::write::<Message>(text)
+            let clipboard_task = iced::clipboard::write::<Message>(text);
+            #[cfg(target_os = "macos")]
+            {
+                clipboard_task
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Some(id) = state.window_id {
+                    Task::batch([window::minimize(id, true), clipboard_task])
+                } else {
+                    clipboard_task
+                }
+            }
         }
         Message::OpenConfig => {
             state.config_prompts = state
@@ -1105,7 +1113,12 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     update(state, Message::Undo)
                 }
                 keyboard::Key::Character(ref c) if c.as_str() == "w" && modifiers.command() => {
+                    #[cfg(target_os = "macos")]
                     hide_app();
+                    #[cfg(not(target_os = "macos"))]
+                    if let Some(id) = state.window_id {
+                        return window::minimize(id, true);
+                    }
                     Task::none()
                 }
                 keyboard::Key::Character(ref c)
