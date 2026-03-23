@@ -27,21 +27,21 @@ pub struct AppPalette {
 
 /// Catppuccin Frappe (dark theme).
 pub const FRAPPE: AppPalette = AppPalette {
-    bg: Color::from_rgb(0.180, 0.192, 0.251),           // #2E3140 Base
-    surface: Color::from_rgb(0.208, 0.220, 0.286),       // #353848 Surface0
+    bg: Color::from_rgb(0.180, 0.192, 0.251), // #2E3140 Base
+    surface: Color::from_rgb(0.208, 0.220, 0.286), // #353848 Surface0
     surface_hover: Color::from_rgb(0.247, 0.259, 0.325), // #3F4253 Surface1
-    muted: Color::from_rgb(0.455, 0.475, 0.557),         // #74798E Overlay0
-    text: Color::from_rgb(0.780, 0.796, 0.871),          // #C7CBDE Text
-    accent: Color::from_rgb(0.949, 0.392, 0.580),        // #F26494 Pink (Catppuccin pink)
-    accent_hover: Color::from_rgb(0.969, 0.478, 0.647),  // #F87AA5
+    muted: Color::from_rgb(0.455, 0.475, 0.557), // #74798E Overlay0
+    text: Color::from_rgb(0.780, 0.796, 0.871), // #C7CBDE Text
+    accent: Color::from_rgb(0.949, 0.392, 0.580), // #F26494 Pink (Catppuccin pink)
+    accent_hover: Color::from_rgb(0.969, 0.478, 0.647), // #F87AA5
     accent_pressed: Color::from_rgb(0.831, 0.294, 0.471), // #D44B78
     accent_faint: Color::from_rgba(0.949, 0.392, 0.580, 0.12),
-    green: Color::from_rgb(0.651, 0.820, 0.404),         // #A6D167 Green
+    green: Color::from_rgb(0.651, 0.820, 0.404), // #A6D167 Green
     green_hover: Color::from_rgb(0.741, 0.890, 0.500),
     green_pressed: Color::from_rgb(0.541, 0.710, 0.294),
-    red: Color::from_rgb(0.906, 0.298, 0.392),           // #E74C64 Red
-    disabled: Color::from_rgb(0.282, 0.294, 0.361),      // #484B5C
-    border: Color::from_rgb(0.282, 0.294, 0.361),        // #484B5C
+    red: Color::from_rgb(0.906, 0.298, 0.392), // #E74C64 Red
+    disabled: Color::from_rgb(0.282, 0.294, 0.361), // #484B5C
+    border: Color::from_rgb(0.282, 0.294, 0.361), // #484B5C
     selection: Color::from_rgba(0.949, 0.392, 0.580, 0.30),
     history_card_bg: Color::from_rgb(0.231, 0.243, 0.310),
     history_card_border: Color::from_rgba(1.0, 1.0, 1.0, 0.04),
@@ -49,21 +49,21 @@ pub const FRAPPE: AppPalette = AppPalette {
 
 /// Catppuccin Latte (light theme).
 pub const LATTE: AppPalette = AppPalette {
-    bg: Color::from_rgb(0.937, 0.929, 0.914),            // #EFEDE9 Base
-    surface: Color::from_rgb(0.898, 0.890, 0.875),       // #E5E3DF Surface0
+    bg: Color::from_rgb(0.937, 0.929, 0.914), // #EFEDE9 Base
+    surface: Color::from_rgb(0.898, 0.890, 0.875), // #E5E3DF Surface0
     surface_hover: Color::from_rgb(0.859, 0.851, 0.835), // #DBD9D5 Surface1
-    muted: Color::from_rgb(0.537, 0.525, 0.506),         // #898681 Overlay0
-    text: Color::from_rgb(0.282, 0.271, 0.259),          // #484542 Text
-    accent: Color::from_rgb(0.918, 0.286, 0.506),        // #EA4981 Pink
-    accent_hover: Color::from_rgb(0.949, 0.380, 0.576),  // #F26193
+    muted: Color::from_rgb(0.537, 0.525, 0.506), // #898681 Overlay0
+    text: Color::from_rgb(0.282, 0.271, 0.259), // #484542 Text
+    accent: Color::from_rgb(0.918, 0.286, 0.506), // #EA4981 Pink
+    accent_hover: Color::from_rgb(0.949, 0.380, 0.576), // #F26193
     accent_pressed: Color::from_rgb(0.788, 0.188, 0.408), // #C93068
     accent_faint: Color::from_rgba(0.918, 0.286, 0.506, 0.12),
-    green: Color::from_rgb(0.251, 0.584, 0.133),         // #409522 Green
+    green: Color::from_rgb(0.251, 0.584, 0.133), // #409522 Green
     green_hover: Color::from_rgb(0.341, 0.674, 0.223),
     green_pressed: Color::from_rgb(0.161, 0.494, 0.043),
-    red: Color::from_rgb(0.827, 0.204, 0.267),           // #D33444 Red
-    disabled: Color::from_rgb(0.737, 0.729, 0.714),      // #BCBAB6
-    border: Color::from_rgb(0.800, 0.792, 0.776),        // #CCCAC6
+    red: Color::from_rgb(0.827, 0.204, 0.267), // #D33444 Red
+    disabled: Color::from_rgb(0.737, 0.729, 0.714), // #BCBAB6
+    border: Color::from_rgb(0.800, 0.792, 0.776), // #CCCAC6
     selection: Color::from_rgba(0.918, 0.286, 0.506, 0.25),
     history_card_bg: Color::from_rgb(0.918, 0.910, 0.894),
     history_card_border: Color::from_rgba(0.0, 0.0, 0.0, 0.06),
@@ -317,7 +317,11 @@ impl AppPalette {
         text_input::Style {
             background: Background::Color(self.surface),
             border: Border {
-                color: if focused { self.accent } else { Color::TRANSPARENT },
+                color: if focused {
+                    self.accent
+                } else {
+                    Color::TRANSPARENT
+                },
                 width: if focused { 1.0 } else { 0.0 },
                 radius: 8.0.into(),
             },
@@ -368,7 +372,11 @@ impl AppPalette {
         text_editor::Style {
             background: Background::Color(self.surface),
             border: Border {
-                color: if focused { self.accent } else { Color::TRANSPARENT },
+                color: if focused {
+                    self.accent
+                } else {
+                    Color::TRANSPARENT
+                },
                 width: if focused { 1.0 } else { 0.0 },
                 radius: 8.0.into(),
             },

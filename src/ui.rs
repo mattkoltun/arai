@@ -11,8 +11,8 @@ use iced::widget::{
     text_input, toggler,
 };
 use iced::{
-    Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme,
-    keyboard, overlay, time, window,
+    Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme, keyboard, overlay, time,
+    window,
 };
 use log::debug;
 use std::sync::atomic::AtomicBool;
@@ -1293,7 +1293,9 @@ fn view_wizard_api_key(state: &UiRuntime) -> Element<'_, Message> {
     let top_bar = container(top_row).padding([10, 14]).width(Fill);
 
     // Title
-    let title = text("OpenAI API Key").size(18).color(current_palette().text);
+    let title = text("OpenAI API Key")
+        .size(18)
+        .color(current_palette().text);
     let subtitle = text(
         "Enter your API key to enable text processing.\nYou can get one at platform.openai.com",
     )
@@ -1391,7 +1393,9 @@ fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
     let top_bar = container(top_row).padding([10, 14]).width(Fill);
 
     // Title
-    let title = text("Whisper Model Setup").size(18).color(current_palette().text);
+    let title = text("Whisper Model Setup")
+        .size(18)
+        .color(current_palette().text);
     let subtitle = text("Select a model to download, or browse for an existing one.")
         .size(12)
         .color(current_palette().muted);
@@ -1406,7 +1410,11 @@ fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
             model.name, model.size_label, model.description
         ))
         .size(12)
-        .color(if is_selected { current_palette().accent } else { current_palette().text });
+        .color(if is_selected {
+            current_palette().accent
+        } else {
+            current_palette().text
+        });
 
         let model_btn = button(label)
             .style(if is_selected {
@@ -1439,7 +1447,9 @@ fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
             .size(11)
             .color(current_palette().muted)
         } else {
-            text("Downloading...").size(11).color(current_palette().muted)
+            text("Downloading...")
+                .size(11)
+                .color(current_palette().muted)
         };
 
         let cancel_btn = button(text("Cancel").size(13))
@@ -1604,7 +1614,9 @@ fn view_main<'a>(
         editor_widget = editor_widget.on_action(Message::EditorAction);
     }
 
-    let char_count_text = text(format!("{} chars", char_count)).size(12).color(current_palette().muted);
+    let char_count_text = text(format!("{} chars", char_count))
+        .size(12)
+        .color(current_palette().muted);
 
     // mic: E029=mic, E02B=mic_off
     let mic_btn = if listening {
@@ -1798,12 +1810,16 @@ fn view_history(state: &UiRuntime) -> Element<'_, Message> {
             .width(Fill);
 
     let body: Element<'_, Message> = if state.history_entries.is_empty() {
-        container(text("No history yet.").size(15).color(current_palette().muted))
-            .center_x(Fill)
-            .center_y(Fill)
-            .height(Fill)
-            .width(Fill)
-            .into()
+        container(
+            text("No history yet.")
+                .size(15)
+                .color(current_palette().muted),
+        )
+        .center_x(Fill)
+        .center_y(Fill)
+        .height(Fill)
+        .width(Fill)
+        .into()
     } else {
         let mut entries_col = column![].spacing(10);
         for (index, entry) in state.history_entries.iter().enumerate() {
@@ -1832,7 +1848,9 @@ fn view_history(state: &UiRuntime) -> Element<'_, Message> {
             )
             .height(iced::Length::Shrink);
 
-            let timestamp_label = text(&entry.timestamp).size(11).color(current_palette().muted);
+            let timestamp_label = text(&entry.timestamp)
+                .size(11)
+                .color(current_palette().muted);
 
             let card_content = column![
                 text_content,
@@ -1960,7 +1978,11 @@ fn view_setup_tab(
 
     let mic_card = column![
         text("Microphone").size(15).color(current_palette().text),
-        column![text("Input Device").size(11).color(current_palette().muted), device_picker].spacing(4),
+        column![
+            text("Input Device").size(11).color(current_palette().muted),
+            device_picker
+        ]
+        .spacing(4),
     ]
     .spacing(10)
     .padding(14);
@@ -2002,7 +2024,9 @@ fn view_setup_tab(
     .padding(14);
 
     // ── Transcriber card ────────────────────────────────────────────
-    let model_display = text(sf.model_path.clone()).size(12).color(current_palette().muted);
+    let model_display = text(sf.model_path.clone())
+        .size(12)
+        .color(current_palette().muted);
 
     // swap_horiz: E8D4
     let change_model_btn = button(
@@ -2059,14 +2083,20 @@ fn view_setup_tab(
     let transcriber_card = column![
         text("Transcriber").size(15).color(current_palette().text),
         model_section,
-        column![text("Window (s)").size(11).color(current_palette().muted), window_secs_slider].spacing(4),
+        column![
+            text("Window (s)").size(11).color(current_palette().muted),
+            window_secs_slider
+        ]
+        .spacing(4),
         column![
             text("Overlap (s)").size(11).color(current_palette().muted),
             overlap_secs_slider
         ]
         .spacing(4),
         column![
-            text("Silence Threshold").size(11).color(current_palette().muted),
+            text("Silence Threshold")
+                .size(11)
+                .color(current_palette().muted),
             silence_thresh_slider
         ]
         .spacing(4),
@@ -2098,8 +2128,14 @@ fn view_setup_tab(
     .on_press(Message::StartHotkeyCapture);
 
     let hotkey_card = column![
-        text("Keyboard Shortcut").size(15).color(current_palette().text),
-        column![text("Quick Launch").size(11).color(current_palette().muted), hotkey_btn].spacing(4),
+        text("Keyboard Shortcut")
+            .size(15)
+            .color(current_palette().text),
+        column![
+            text("Quick Launch").size(11).color(current_palette().muted),
+            hotkey_btn
+        ]
+        .spacing(4),
     ]
     .spacing(10)
     .padding(14);
@@ -2111,9 +2147,12 @@ fn view_setup_tab(
         let color = if selected { p.accent } else { p.muted };
         let icon_char = if selected { '\u{E837}' } else { '\u{E836}' };
         button(
-            row![icon(icon_char, 18.0).color(color), text(label).size(13).color(color)]
-                .spacing(4)
-                .align_y(iced::Alignment::Center),
+            row![
+                icon(icon_char, 18.0).color(color),
+                text(label).size(13).color(color)
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center),
         )
         .style(ghost_btn)
         .padding([6, 10])
@@ -2246,7 +2285,9 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
         .size(20);
 
     let gpu_card = column![
-        text("Model Inference").size(15).color(current_palette().text),
+        text("Model Inference")
+            .size(15)
+            .color(current_palette().text),
         column![
             text("Enable Metal GPU for faster inference on Apple Silicon.")
                 .size(11)
@@ -2292,9 +2333,7 @@ fn subscription(state: &UiRuntime) -> Subscription<Message> {
         Subscription::run_with(UiUpdateBridge(ui_update_rx), ui_update_stream),
     ];
     if state.config_theme_mode == ThemeMode::System {
-        subs.push(
-            time::every(Duration::from_secs(5)).map(|_| Message::CheckSystemAppearance),
-        );
+        subs.push(time::every(Duration::from_secs(5)).map(|_| Message::CheckSystemAppearance));
     }
     Subscription::batch(subs)
 }

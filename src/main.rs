@@ -75,9 +75,7 @@ fn main() {
             controller_event_tx.clone(),
             config.transcriber.clone(),
         );
-        if model_exists
-            && let Err(err) = transcriber.start()
-        {
+        if model_exists && let Err(err) = transcriber.start() {
             log::error!("Transcriber failed to start: {err}");
         }
         let agent = agent::Agent::new(controller_event_tx.clone(), config.open_api_key.clone());
