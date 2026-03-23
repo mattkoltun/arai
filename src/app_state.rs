@@ -1,4 +1,4 @@
-use crate::config::{AgentPrompt, Config, TranscriberConfig};
+use crate::config::{AgentPrompt, Config, ThemeMode, TranscriberConfig};
 use crate::messages::ApiKeyStatus;
 use std::sync::{Arc, Mutex};
 
@@ -11,6 +11,7 @@ pub struct AppStateSnapshot {
     pub global_hotkey: String,
     #[allow(dead_code)]
     pub api_key_status: ApiKeyStatus,
+    pub theme_mode: ThemeMode,
 }
 
 /// Shared application state.
@@ -62,6 +63,7 @@ impl AppState {
             input_device: config.input_device.clone(),
             global_hotkey: config.global_hotkey.clone(),
             api_key_status: compute_api_key_status(&config.open_api_key),
+            theme_mode: config.theme_mode.clone(),
         }
     }
 
@@ -99,6 +101,14 @@ impl AppState {
         }
     }
 
+    pub fn update_theme_mode(&self, mode: ThemeMode) {
+        let mut config = self.inner.lock().expect("app_state mutex poisoned");
+        config.theme_mode = mode;
+        if let Err(e) = config.save() {
+            log::error!("Failed to save config: {e}");
+        }
+    }
+
     /// Updates the runtime API key. Does NOT save to config file —
     /// the key is persisted via keyring, not YAML.
     #[allow(dead_code)]
@@ -131,6 +141,7 @@ mod tests {
             transcriber: TranscriberConfig::default(),
             global_hotkey: "Alt+Space".to_string(),
             input_device: None,
+            theme_mode: ThemeMode::default(),
         }
     }
 

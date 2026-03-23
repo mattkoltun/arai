@@ -1,17 +1,17 @@
 use crate::channels::{AppEventSender, UiUpdateReceiver};
-use crate::config::{AgentPrompt, TranscriberConfig};
+use crate::config::{AgentPrompt, ThemeMode, TranscriberConfig};
 use crate::global_hotkey::HotkeyHandle;
 use crate::history::HistoryRecord;
 use crate::messages::{ApiKeyStatus, AppEvent, AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
+use crate::theme::{self, AppPalette};
 use futures::SinkExt;
 use iced::font::Family;
-use iced::theme::Palette;
 use iced::widget::{
     Column, button, column, container, pick_list, row, scrollable, slider, text, text_editor,
     text_input, toggler,
 };
 use iced::{
-    Background, Border, Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme,
+    Color, Element, Fill, FillPortion, Font, Subscription, Task, Theme,
     keyboard, overlay, time, window,
 };
 use log::debug;
@@ -47,14 +47,20 @@ fn hide_app() {}
 #[cfg(not(target_os = "macos"))]
 fn show_app() {}
 
-// ── Palette constants ────────────────────────────────────────────────
-const BG: Color = Color::from_rgb(0.082, 0.090, 0.118); // #151724 dark graphite-blue
-const SURFACE: Color = Color::from_rgb(0.118, 0.125, 0.157); // #1E2028 slightly lighter
-const MUTED: Color = Color::from_rgb(0.400, 0.420, 0.490); // #66697D blue-grey
-const TEXT_COLOR: Color = Color::from_rgb(0.847, 0.855, 0.894); // #D8DAE4 light
-const PINK: Color = Color::from_rgb(0.976, 0.361, 0.576); // #F95C93 pastel pink
-const GREEN: Color = Color::from_rgb(0.651, 0.886, 0.180); // #A6E22E
-const RED: Color = Color::from_rgb(0.976, 0.149, 0.447); // #F92672
+/// Resolves the active palette from the current theme mode.
+fn active_palette(mode: &ThemeMode, system_dark: bool) -> AppPalette {
+    match mode {
+        ThemeMode::Dark => theme::FRAPPE,
+        ThemeMode::Light => theme::LATTE,
+        ThemeMode::System => {
+            if system_dark {
+                theme::FRAPPE
+            } else {
+                theme::LATTE
+            }
+        }
+    }
+}
 
 // ── Font constants ───────────────────────────────────────────────────
 const ICONS: Font = Font {
@@ -72,346 +78,71 @@ fn icon(codepoint: char, size: f32) -> iced::widget::Text<'static> {
         .shaping(text::Shaping::Basic)
 }
 
-// ── Style: icon button — fully transparent, icon glows on hover ──────
+// ── Thread-local palette for style closures ─────────────────────────
+// Updated by `theme()` on every frame so closures always see the
+// current palette without needing captured state.
+std::thread_local! {
+    static PALETTE: std::cell::Cell<AppPalette> = const { std::cell::Cell::new(theme::FRAPPE) };
+}
+
+fn current_palette() -> AppPalette {
+    PALETTE.with(|p| p.get())
+}
+
+// Thin wrappers that delegate to the thread-local palette.
 fn icon_btn(_theme: &Theme, status: button::Status) -> button::Style {
-    let text_color = match status {
-        button::Status::Hovered => PINK,
-        button::Status::Pressed => Color::from_rgb(0.85, 0.25, 0.44),
-        button::Status::Disabled => Color::from_rgb(0.25, 0.26, 0.30),
-        _ => MUTED,
-    };
-    button::Style {
-        text_color,
-        background: None,
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 0.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().icon_btn(status)
 }
-
-// Icon button when "active" (e.g. listening) — glows green
 fn icon_btn_active(_theme: &Theme, status: button::Status) -> button::Style {
-    let text_color = match status {
-        button::Status::Hovered => Color::from_rgb(0.75, 0.95, 0.35),
-        button::Status::Pressed => Color::from_rgb(0.55, 0.75, 0.12),
-        _ => GREEN,
-    };
-    button::Style {
-        text_color,
-        background: None,
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 0.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().icon_btn_active(status)
 }
-
 fn icon_btn_danger(_theme: &Theme, status: button::Status) -> button::Style {
-    let text_color = match status {
-        button::Status::Hovered => PINK,
-        button::Status::Pressed => Color::from_rgb(0.85, 0.10, 0.35),
-        _ => RED,
-    };
-    button::Style {
-        text_color,
-        background: None,
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 0.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().icon_btn_danger(status)
 }
-
-// ── Style: containers ────────────────────────────────────────────────
 fn bg_container(_theme: &Theme) -> container::Style {
-    container::Style {
-        text_color: None,
-        background: Some(Background::Color(BG)),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 0.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().bg_container()
 }
-
 fn surface_container(_theme: &Theme) -> container::Style {
-    container::Style {
-        text_color: None,
-        background: Some(Background::Color(SURFACE)),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 10.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().surface_container()
 }
-
-// ── Style: primary filled button (Save) ──────────────────────────────
 fn primary_btn(_theme: &Theme, status: button::Status) -> button::Style {
-    let bg = match status {
-        button::Status::Hovered => Color::from_rgb(1.0, 0.43, 0.63),
-        button::Status::Pressed => Color::from_rgb(0.85, 0.25, 0.44),
-        _ => PINK,
-    };
-    button::Style {
-        text_color: Color::WHITE,
-        background: Some(Background::Color(bg)),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 8.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().primary_btn(status)
 }
-
-// Carousel chip — selected state
 fn carousel_chip_active(_theme: &Theme, status: button::Status) -> button::Style {
-    let bg = match status {
-        button::Status::Hovered => Color::from_rgba(0.976, 0.361, 0.576, 0.18),
-        button::Status::Pressed => Color::from_rgba(0.976, 0.361, 0.576, 0.28),
-        _ => Color::from_rgba(0.976, 0.361, 0.576, 0.12),
-    };
-    button::Style {
-        text_color: PINK,
-        background: Some(Background::Color(bg)),
-        border: Border {
-            color: Color::from_rgba(0.976, 0.361, 0.576, 0.3),
-            width: 1.0,
-            radius: 14.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().carousel_chip_active(status)
 }
-
-// Carousel chip — inactive state
 fn carousel_chip_inactive(_theme: &Theme, status: button::Status) -> button::Style {
-    let (bg, text_color) = match status {
-        button::Status::Hovered => (Color::from_rgba(1.0, 1.0, 1.0, 0.06), TEXT_COLOR),
-        button::Status::Pressed => (Color::from_rgba(1.0, 1.0, 1.0, 0.10), TEXT_COLOR),
-        _ => (Color::TRANSPARENT, MUTED),
-    };
-    button::Style {
-        text_color,
-        background: Some(Background::Color(bg)),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 14.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().carousel_chip_inactive(status)
 }
-
-// History entry card — elevated surface with rounded corners
 fn history_card(_theme: &Theme) -> container::Style {
-    container::Style {
-        text_color: None,
-        background: Some(Background::Color(Color::from_rgb(0.145, 0.153, 0.192))),
-        border: Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.04),
-            width: 1.0,
-            radius: 12.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().history_card()
 }
-
-// Ghost button for config items (add prompt, etc)
 fn ghost_btn(_theme: &Theme, status: button::Status) -> button::Style {
-    let (bg, text_color) = match status {
-        button::Status::Hovered => (Color::from_rgba(0.976, 0.361, 0.576, 0.12), TEXT_COLOR),
-        button::Status::Pressed => (Color::from_rgba(0.976, 0.361, 0.576, 0.22), TEXT_COLOR),
-        button::Status::Disabled => (Color::TRANSPARENT, Color::from_rgb(0.25, 0.26, 0.30)),
-        _ => (Color::TRANSPARENT, MUTED),
-    };
-    button::Style {
-        text_color,
-        background: Some(Background::Color(bg)),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 8.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().ghost_btn(status)
 }
-
 fn hotkey_input(_theme: &Theme, status: button::Status) -> button::Style {
-    let bg = match status {
-        button::Status::Hovered => Color::from_rgba(1.0, 1.0, 1.0, 0.08),
-        _ => Color::from_rgba(1.0, 1.0, 1.0, 0.04),
-    };
-    button::Style {
-        text_color: TEXT_COLOR,
-        background: Some(Background::Color(bg)),
-        border: Border {
-            color: Color::from_rgb(0.22, 0.23, 0.27),
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().hotkey_input(status)
 }
-
 fn hotkey_input_active(_theme: &Theme, _status: button::Status) -> button::Style {
-    button::Style {
-        text_color: PINK,
-        background: Some(Background::Color(Color::from_rgba(
-            0.976, 0.361, 0.576, 0.08,
-        ))),
-        border: Border {
-            color: PINK,
-            width: 1.5,
-            radius: 8.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().hotkey_input_active()
 }
-
-// ── Style: tab buttons ───────────────────────────────────────────────
 fn tab_btn_active(_theme: &Theme, status: button::Status) -> button::Style {
-    let bg = match status {
-        button::Status::Hovered => Color::from_rgb(1.0, 0.43, 0.63),
-        button::Status::Pressed => Color::from_rgb(0.85, 0.25, 0.44),
-        _ => PINK,
-    };
-    button::Style {
-        text_color: Color::WHITE,
-        background: Some(Background::Color(bg)),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 6.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().tab_btn_active(status)
 }
-
 fn tab_btn_inactive(_theme: &Theme, status: button::Status) -> button::Style {
-    let (bg, text_color) = match status {
-        button::Status::Hovered => (Color::from_rgba(0.976, 0.361, 0.576, 0.10), TEXT_COLOR),
-        button::Status::Pressed => (Color::from_rgba(0.976, 0.361, 0.576, 0.20), TEXT_COLOR),
-        _ => (Color::TRANSPARENT, MUTED),
-    };
-    button::Style {
-        text_color,
-        background: Some(Background::Color(bg)),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 6.0.into(),
-        },
-        shadow: Default::default(),
-        snap: false,
-    }
+    current_palette().tab_btn_inactive(status)
 }
-
-// ── Style: text input / editor ───────────────────────────────────────
 fn borderless_input(_theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let border_color = match status {
-        text_input::Status::Focused { .. } => PINK,
-        _ => Color::TRANSPARENT,
-    };
-    text_input::Style {
-        background: Background::Color(SURFACE),
-        border: Border {
-            color: border_color,
-            width: if matches!(status, text_input::Status::Focused { .. }) {
-                1.0
-            } else {
-                0.0
-            },
-            radius: 8.0.into(),
-        },
-        icon: MUTED,
-        placeholder: MUTED,
-        value: TEXT_COLOR,
-        selection: Color::from_rgba(0.976, 0.361, 0.576, 0.3),
-    }
+    current_palette().borderless_input(status)
 }
-
 fn styled_pick_list(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
-    let border_color = match status {
-        pick_list::Status::Opened { .. } => PINK,
-        pick_list::Status::Hovered => Color::from_rgba(0.976, 0.361, 0.576, 0.4),
-        _ => Color::TRANSPARENT,
-    };
-    pick_list::Style {
-        background: Background::Color(SURFACE),
-        text_color: TEXT_COLOR,
-        placeholder_color: MUTED,
-        handle_color: MUTED,
-        border: Border {
-            color: border_color,
-            width: if matches!(status, pick_list::Status::Opened { .. }) {
-                1.0
-            } else {
-                0.0
-            },
-            radius: 8.0.into(),
-        },
-    }
+    current_palette().styled_pick_list(status)
 }
-
 fn pick_list_menu(_theme: &Theme) -> overlay::menu::Style {
-    overlay::menu::Style {
-        background: Background::Color(SURFACE),
-        text_color: TEXT_COLOR,
-        selected_text_color: Color::WHITE,
-        selected_background: Background::Color(PINK),
-        border: Border {
-            color: MUTED,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        shadow: Default::default(),
-    }
+    current_palette().pick_list_menu()
 }
-
 fn borderless_editor(_theme: &Theme, status: text_editor::Status) -> text_editor::Style {
-    let border_color = match status {
-        text_editor::Status::Focused { .. } => PINK,
-        _ => Color::TRANSPARENT,
-    };
-    text_editor::Style {
-        background: Background::Color(SURFACE),
-        border: Border {
-            color: border_color,
-            width: if matches!(status, text_editor::Status::Focused { .. }) {
-                1.0
-            } else {
-                0.0
-            },
-            radius: 8.0.into(),
-        },
-        placeholder: MUTED,
-        value: TEXT_COLOR,
-        selection: Color::from_rgba(0.976, 0.361, 0.576, 0.3),
-    }
+    current_palette().borderless_editor(status)
 }
 
 // ── Config tab enum ──────────────────────────────────────────────────
@@ -524,6 +255,8 @@ impl Ui {
                     config_selected_input_device: None,
                     config_global_hotkey: String::new(),
                     config_hotkey_listening: false,
+                    config_theme_mode: ThemeMode::default(),
+                    system_dark: theme::system_is_dark(),
                     config_use_gpu: true,
                     config_flash_attn: true,
                     config_no_timestamps: true,
@@ -603,6 +336,9 @@ struct UiRuntime {
     config_selected_input_device: Option<String>,
     config_global_hotkey: String,
     config_hotkey_listening: bool,
+    config_theme_mode: ThemeMode,
+    /// Cached system dark mode state, polled periodically.
+    system_dark: bool,
     config_use_gpu: bool,
     config_flash_attn: bool,
     config_no_timestamps: bool,
@@ -672,6 +408,8 @@ enum Message {
     UseGpuToggled(bool),
     FlashAttnToggled(bool),
     NoTimestampsToggled(bool),
+    ThemeModeChanged(ThemeMode),
+    CheckSystemAppearance,
     SwitchConfigTab(ConfigTab),
     WizardSelectModel(usize),
     WizardStartDownload,
@@ -847,6 +585,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     selected_input_device,
                     global_hotkey,
                     api_key_status,
+                    theme_mode,
                 } => {
                     // Sync active_prompt to default when prompts change.
                     if state.active_prompt >= agent_prompts.len() {
@@ -858,6 +597,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     state.snapshot_selected_input_device = selected_input_device;
                     state.snapshot_global_hotkey = global_hotkey;
                     state.config_api_key_status = api_key_status;
+                    state.config_theme_mode = theme_mode;
                 }
                 UiUpdate::ModelDownloadProgress(downloaded, total) => {
                     return self::update(state, Message::WizardDownloadProgress(downloaded, total));
@@ -1115,6 +855,15 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::NoTimestampsToggled(value) => {
             state.config_no_timestamps = value;
+            Task::none()
+        }
+        Message::ThemeModeChanged(mode) => {
+            state.config_theme_mode = mode.clone();
+            state.send_event(AppEventKind::UiUpdateThemeMode(mode));
+            Task::none()
+        }
+        Message::CheckSystemAppearance => {
+            state.system_dark = theme::system_is_dark();
             Task::none()
         }
         Message::StartHotkeyCapture => {
@@ -1544,12 +1293,12 @@ fn view_wizard_api_key(state: &UiRuntime) -> Element<'_, Message> {
     let top_bar = container(top_row).padding([10, 14]).width(Fill);
 
     // Title
-    let title = text("OpenAI API Key").size(18).color(TEXT_COLOR);
+    let title = text("OpenAI API Key").size(18).color(current_palette().text);
     let subtitle = text(
         "Enter your API key to enable text processing.\nYou can get one at platform.openai.com",
     )
     .size(12)
-    .color(MUTED);
+    .color(current_palette().muted);
 
     // Key input
     let key_input = text_input("sk-...", &state.wizard_api_key_input)
@@ -1587,7 +1336,7 @@ fn view_wizard_api_key(state: &UiRuntime) -> Element<'_, Message> {
 
     // Error message
     let error_row: Element<'_, Message> = if let Some(ref err) = state.wizard_api_key_error {
-        text(err).size(12).color(RED).into()
+        text(err).size(12).color(current_palette().red).into()
     } else {
         column![].into()
     };
@@ -1642,10 +1391,10 @@ fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
     let top_bar = container(top_row).padding([10, 14]).width(Fill);
 
     // Title
-    let title = text("Whisper Model Setup").size(18).color(TEXT_COLOR);
+    let title = text("Whisper Model Setup").size(18).color(current_palette().text);
     let subtitle = text("Select a model to download, or browse for an existing one.")
         .size(12)
-        .color(MUTED);
+        .color(current_palette().muted);
 
     // Model list
     let models = crate::model_downloader::WHISPER_MODELS;
@@ -1657,7 +1406,7 @@ fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
             model.name, model.size_label, model.description
         ))
         .size(12)
-        .color(if is_selected { PINK } else { TEXT_COLOR });
+        .color(if is_selected { current_palette().accent } else { current_palette().text });
 
         let model_btn = button(label)
             .style(if is_selected {
@@ -1688,9 +1437,9 @@ fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
                 pct
             ))
             .size(11)
-            .color(MUTED)
+            .color(current_palette().muted)
         } else {
-            text("Downloading...").size(11).color(MUTED)
+            text("Downloading...").size(11).color(current_palette().muted)
         };
 
         let cancel_btn = button(text("Cancel").size(13))
@@ -1711,7 +1460,7 @@ fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
     };
 
     // Divider text
-    let or_text = text("— or —").size(12).color(MUTED);
+    let or_text = text("— or —").size(12).color(current_palette().muted);
 
     // Browse section
     let browse_btn = button(
@@ -1728,7 +1477,7 @@ fn view_wizard(state: &UiRuntime) -> Element<'_, Message> {
 
     // Error message
     let error_row: Element<'_, Message> = if let Some(ref err) = state.wizard_error {
-        text(err).size(12).color(RED).into()
+        text(err).size(12).color(current_palette().red).into()
     } else {
         column![].into()
     };
@@ -1855,7 +1604,7 @@ fn view_main<'a>(
         editor_widget = editor_widget.on_action(Message::EditorAction);
     }
 
-    let char_count_text = text(format!("{} chars", char_count)).size(12).color(MUTED);
+    let char_count_text = text(format!("{} chars", char_count)).size(12).color(current_palette().muted);
 
     // mic: E029=mic, E02B=mic_off
     let mic_btn = if listening {
@@ -1998,14 +1747,14 @@ fn view_main<'a>(
 
 /// Renders the error detail view that replaces the editor when an error is being viewed.
 fn view_error_detail(error: &ErrorInfo) -> Element<'_, Message> {
-    let title = text(&error.title).size(18).color(RED);
+    let title = text(&error.title).size(18).color(current_palette().red);
     let source_line = text(format!("Source: {}", error.source))
         .size(12)
-        .color(MUTED);
+        .color(current_palette().muted);
     let time_line = text(format!("Time: {}", error.timestamp))
         .size(12)
-        .color(MUTED);
-    let detail = text(&error.detail).size(13).color(TEXT_COLOR);
+        .color(current_palette().muted);
+    let detail = text(&error.detail).size(13).color(current_palette().text);
 
     let dismiss_btn = button(
         row![icon('\u{E5CD}', 16.0), text("Dismiss").size(13)]
@@ -2049,7 +1798,7 @@ fn view_history(state: &UiRuntime) -> Element<'_, Message> {
             .width(Fill);
 
     let body: Element<'_, Message> = if state.history_entries.is_empty() {
-        container(text("No history yet.").size(15).color(MUTED))
+        container(text("No history yet.").size(15).color(current_palette().muted))
             .center_x(Fill)
             .center_y(Fill)
             .height(Fill)
@@ -2078,12 +1827,12 @@ fn view_history(state: &UiRuntime) -> Element<'_, Message> {
             let text_content = scrollable(
                 text(display_text)
                     .size(14)
-                    .color(TEXT_COLOR)
+                    .color(current_palette().text)
                     .wrapping(text::Wrapping::Word),
             )
             .height(iced::Length::Shrink);
 
-            let timestamp_label = text(&entry.timestamp).size(11).color(MUTED);
+            let timestamp_label = text(&entry.timestamp).size(11).color(current_palette().muted);
 
             let card_content = column![
                 text_content,
@@ -2162,7 +1911,9 @@ fn view_config<'a>(
     .width(Fill);
 
     let tab_content = match config_tab {
-        ConfigTab::Setup => view_setup_tab(&sf, &state.config_api_key_status),
+        ConfigTab::Setup => {
+            view_setup_tab(&sf, &state.config_api_key_status, &state.config_theme_mode)
+        }
         ConfigTab::Instructions => view_instructions_tab(state, &prompts, config_default),
         ConfigTab::Advanced => view_advanced_tab(state),
     };
@@ -2190,7 +1941,11 @@ fn view_config<'a>(
         .into()
 }
 
-fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'static, Message> {
+fn view_setup_tab(
+    sf: &SetupFields,
+    api_key_status: &ApiKeyStatus,
+    theme_mode: &ThemeMode,
+) -> Column<'static, Message> {
     // ── Microphone card ─────────────────────────────────────────────
     let device_picker = pick_list(
         sf.input_devices.clone(),
@@ -2204,8 +1959,8 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
     .width(Fill);
 
     let mic_card = column![
-        text("Microphone").size(15).color(TEXT_COLOR),
-        column![text("Input Device").size(11).color(MUTED), device_picker].spacing(4),
+        text("Microphone").size(15).color(current_palette().text),
+        column![text("Input Device").size(11).color(current_palette().muted), device_picker].spacing(4),
     ]
     .spacing(10)
     .padding(14);
@@ -2222,8 +1977,8 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
     };
 
     let display_color = match api_key_status {
-        ApiKeyStatus::NotSet => RED,
-        _ => MUTED,
+        ApiKeyStatus::NotSet => current_palette().red,
+        _ => current_palette().muted,
     };
 
     let api_key_display_text = text(api_key_display).size(12).color(display_color);
@@ -2239,7 +1994,7 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
     .on_press_maybe(api_key_btn_enabled.then_some(Message::OpenApiKeyFromSettings));
 
     let api_key_card = column![
-        text("API Key").size(15).color(TEXT_COLOR),
+        text("API Key").size(15).color(current_palette().text),
         api_key_display_text,
         api_key_btn,
     ]
@@ -2247,7 +2002,7 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
     .padding(14);
 
     // ── Transcriber card ────────────────────────────────────────────
-    let model_display = text(sf.model_path.clone()).size(12).color(MUTED);
+    let model_display = text(sf.model_path.clone()).size(12).color(current_palette().muted);
 
     // swap_horiz: E8D4
     let change_model_btn = button(
@@ -2260,7 +2015,7 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
     .on_press(Message::OpenWizardFromSettings);
 
     let model_section = column![
-        text("Model").size(11).color(MUTED),
+        text("Model").size(11).color(current_palette().muted),
         model_display,
         change_model_btn,
     ]
@@ -2270,7 +2025,7 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
         slider(1.0..=10.0, sf.window_secs, Message::WindowSecondsChanged).step(0.5),
         text(format!("{:.1}", sf.window_secs))
             .size(12)
-            .color(TEXT_COLOR)
+            .color(current_palette().text)
             .width(35),
     ]
     .spacing(8)
@@ -2280,7 +2035,7 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
         slider(0.0..=2.0, sf.overlap_secs, Message::OverlapSecondsChanged).step(0.05),
         text(format!("{:.2}", sf.overlap_secs))
             .size(12)
-            .color(TEXT_COLOR)
+            .color(current_palette().text)
             .width(35),
     ]
     .spacing(8)
@@ -2295,23 +2050,23 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
         .step(0.001),
         text(format!("{:.3}", sf.silence_thresh))
             .size(12)
-            .color(TEXT_COLOR)
+            .color(current_palette().text)
             .width(35),
     ]
     .spacing(8)
     .align_y(iced::Alignment::Center);
 
     let transcriber_card = column![
-        text("Transcriber").size(15).color(TEXT_COLOR),
+        text("Transcriber").size(15).color(current_palette().text),
         model_section,
-        column![text("Window (s)").size(11).color(MUTED), window_secs_slider].spacing(4),
+        column![text("Window (s)").size(11).color(current_palette().muted), window_secs_slider].spacing(4),
         column![
-            text("Overlap (s)").size(11).color(MUTED),
+            text("Overlap (s)").size(11).color(current_palette().muted),
             overlap_secs_slider
         ]
         .spacing(4),
         column![
-            text("Silence Threshold").size(11).color(MUTED),
+            text("Silence Threshold").size(11).color(current_palette().muted),
             silence_thresh_slider
         ]
         .spacing(4),
@@ -2329,9 +2084,9 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
     };
 
     let hotkey_btn = button(text(hotkey_display).size(13).color(if sf.hotkey_listening {
-        PINK
+        current_palette().accent
     } else {
-        TEXT_COLOR
+        current_palette().text
     }))
     .style(if sf.hotkey_listening {
         hotkey_input_active
@@ -2343,8 +2098,36 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
     .on_press(Message::StartHotkeyCapture);
 
     let hotkey_card = column![
-        text("Keyboard Shortcut").size(15).color(TEXT_COLOR),
-        column![text("Quick Launch").size(11).color(MUTED), hotkey_btn].spacing(4),
+        text("Keyboard Shortcut").size(15).color(current_palette().text),
+        column![text("Quick Launch").size(11).color(current_palette().muted), hotkey_btn].spacing(4),
+    ]
+    .spacing(10)
+    .padding(14);
+
+    // ── Theme card ───────────────────────────────────────────────────
+    let p = current_palette();
+    let theme_radio = |label: &'static str, variant: ThemeMode| {
+        let selected = *theme_mode == variant;
+        let color = if selected { p.accent } else { p.muted };
+        let icon_char = if selected { '\u{E837}' } else { '\u{E836}' };
+        button(
+            row![icon(icon_char, 18.0).color(color), text(label).size(13).color(color)]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+        )
+        .style(ghost_btn)
+        .padding([6, 10])
+        .on_press(Message::ThemeModeChanged(variant))
+    };
+    let theme_selector = row![
+        theme_radio("Dark", ThemeMode::Dark),
+        theme_radio("Light", ThemeMode::Light),
+        theme_radio("System", ThemeMode::System),
+    ]
+    .spacing(6);
+    let theme_card = column![
+        text("Appearance").size(15).color(current_palette().text),
+        theme_selector,
     ]
     .spacing(10)
     .padding(14);
@@ -2352,6 +2135,7 @@ fn view_setup_tab(sf: &SetupFields, api_key_status: &ApiKeyStatus) -> Column<'st
     column![
         container(mic_card).style(surface_container).width(Fill),
         container(api_key_card).style(surface_container).width(Fill),
+        container(theme_card).style(surface_container).width(Fill),
         container(hotkey_card).style(surface_container).width(Fill),
         container(transcriber_card)
             .style(surface_container)
@@ -2411,7 +2195,7 @@ fn view_instructions_tab<'a>(
                 .spacing(6)
                 .align_y(iced::Alignment::Center),
             column![
-                text("Instruction").size(11).color(MUTED),
+                text("Instruction").size(11).color(current_palette().muted),
                 instruction_editor
             ]
             .spacing(4)
@@ -2462,25 +2246,25 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
         .size(20);
 
     let gpu_card = column![
-        text("Model Inference").size(15).color(TEXT_COLOR),
+        text("Model Inference").size(15).color(current_palette().text),
         column![
             text("Enable Metal GPU for faster inference on Apple Silicon.")
                 .size(11)
-                .color(MUTED),
+                .color(current_palette().muted),
             gpu_toggle,
         ]
         .spacing(6),
         column![
             text("Use flash attention for reduced memory and faster decoding.")
                 .size(11)
-                .color(MUTED),
+                .color(current_palette().muted),
             flash_attn_toggle,
         ]
         .spacing(6),
         column![
             text("Skip timestamp computation for faster output.")
                 .size(11)
-                .color(MUTED),
+                .color(current_palette().muted),
             no_timestamps_toggle,
         ]
         .spacing(6),
@@ -2495,7 +2279,7 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
 
 fn subscription(state: &UiRuntime) -> Subscription<Message> {
     let ui_update_rx = state.ui_update_rx.clone();
-    Subscription::batch([
+    let mut subs = vec![
         time::every(Duration::from_millis(16)).map(|_| Message::Tick),
         keyboard::listen().map(|event| match event {
             keyboard::Event::KeyPressed { key, modifiers, .. } => {
@@ -2506,7 +2290,13 @@ fn subscription(state: &UiRuntime) -> Subscription<Message> {
         window::open_events().map(Message::WindowOpened),
         window::close_requests().map(|_| Message::CloseRequested),
         Subscription::run_with(UiUpdateBridge(ui_update_rx), ui_update_stream),
-    ])
+    ];
+    if state.config_theme_mode == ThemeMode::System {
+        subs.push(
+            time::every(Duration::from_secs(5)).map(|_| Message::CheckSystemAppearance),
+        );
+    }
+    Subscription::batch(subs)
 }
 
 struct UiUpdateBridge(Arc<Mutex<Option<UiUpdateReceiver>>>);
@@ -2547,16 +2337,8 @@ fn ui_update_stream(
     ))
 }
 
-fn theme(_state: &UiRuntime) -> Theme {
-    Theme::custom(
-        "Arai".to_string(),
-        Palette {
-            background: BG,
-            text: TEXT_COLOR,
-            primary: PINK,
-            success: GREEN,
-            warning: Color::from_rgb(0.976, 0.659, 0.145),
-            danger: RED,
-        },
-    )
+fn theme(state: &UiRuntime) -> Theme {
+    let p = active_palette(&state.config_theme_mode, state.system_dark);
+    PALETTE.with(|cell| cell.set(p));
+    p.iced_theme()
 }

@@ -192,6 +192,7 @@ impl Controller {
             selected_input_device: snapshot.input_device,
             global_hotkey: snapshot.global_hotkey,
             api_key_status: snapshot.api_key_status,
+            theme_mode: snapshot.theme_mode,
         });
     }
 
@@ -335,6 +336,11 @@ impl Controller {
                 (AppEventSource::Ui, AppEventKind::UiUpdateGlobalHotkey(hotkey)) => {
                     info!("Controller updating global hotkey: {hotkey}");
                     self.app_state.update_global_hotkey(hotkey);
+                    self.send_config_snapshot();
+                }
+                (AppEventSource::Ui, AppEventKind::UiUpdateThemeMode(mode)) => {
+                    info!("Controller updating theme mode: {mode:?}");
+                    self.app_state.update_theme_mode(mode);
                     self.send_config_snapshot();
                 }
                 (AppEventSource::Ui, AppEventKind::UiUpdateApiKey(key)) => {

@@ -34,6 +34,7 @@ log_path: /tmp/arai.log
 global_hotkey: Alt+Space
 default_prompt: 0
 input_device: MacBook Pro Microphone
+theme_mode: dark
 agent_prompts:
   - name: default
     instruction: Rewrite the user text for clarity and brevity while preserving meaning.
@@ -67,6 +68,7 @@ transcriber:
 | `global_hotkey` | `Alt+Space` | System-wide hotkey to toggle listening. Uses [global-hotkey](https://docs.rs/global-hotkey) syntax (e.g. `Alt+Space`, `CmdOrCtrl+Shift+A`). |
 | `default_prompt` | `0` | Index of the active agent prompt (zero-based). |
 | `input_device` | System default | Name of the audio input device. Set this to avoid Bluetooth headphones switching from A2DP (stereo) to HFP (mono) when the mic activates. |
+| `theme_mode` | `dark` | Color scheme. One of: `dark` (Catppuccin Frappé), `light` (Catppuccin Latte), `system` (follows macOS appearance). |
 | `agent_prompts` | See below | List of prompt instructions. Each entry has a `name` and an `instruction`. At least one prompt is required. |
 | `transcriber.model_path` | `~/.local/share/arai/models/ggml-small.en.bin` | Path to the Whisper GGML model file. |
 | `transcriber.window_seconds` | `3.0` | Audio window size in seconds for transcription. |

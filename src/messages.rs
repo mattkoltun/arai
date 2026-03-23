@@ -1,4 +1,4 @@
-use crate::config::{AgentPrompt, TranscriberConfig};
+use crate::config::{AgentPrompt, ThemeMode, TranscriberConfig};
 
 /// Captured audio payload with metadata.
 #[derive(Clone, Debug)]
@@ -31,6 +31,7 @@ pub enum UiUpdate {
         global_hotkey: String,
         #[allow(dead_code)]
         api_key_status: ApiKeyStatus,
+        theme_mode: ThemeMode,
     },
     /// Model download progress update for the wizard.
     ModelDownloadProgress(u64, u64),
@@ -108,6 +109,7 @@ pub enum AppEventKind {
     UiUpdateTranscriber(TranscriberConfig),
     UiUpdateInputDevice(Option<String>),
     UiUpdateGlobalHotkey(String),
+    UiUpdateThemeMode(ThemeMode),
     /// Update the OpenAI API key (UI → Controller).
     #[allow(dead_code)]
     UiUpdateApiKey(String),

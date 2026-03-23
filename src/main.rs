@@ -10,6 +10,7 @@ mod logger;
 mod messages;
 mod model_downloader;
 mod recorder;
+mod theme;
 mod transcriber;
 mod ui;
 

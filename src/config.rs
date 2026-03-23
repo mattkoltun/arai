@@ -30,6 +30,16 @@ const DEFAULT_OVERLAP_SECONDS: f32 = 0.25;
 const DEFAULT_SILENCE_THRESHOLD: f32 = 0.005;
 const DEFAULT_GLOBAL_HOTKEY: &str = "Alt+Space";
 
+/// Controls the application color scheme.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    #[default]
+    Dark,
+    Light,
+    System,
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     MissingHome,
@@ -91,6 +101,8 @@ pub struct Config {
     pub global_hotkey: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_device: Option<String>,
+    #[serde(default)]
+    pub theme_mode: ThemeMode,
 }
 
 fn default_log_level() -> String {
@@ -123,6 +135,7 @@ impl Default for Config {
             transcriber: TranscriberConfig::default(),
             global_hotkey: default_global_hotkey(),
             input_device: None,
+            theme_mode: ThemeMode::default(),
         }
     }
 }
@@ -324,6 +337,7 @@ mod tests {
             transcriber: TranscriberConfig::default(),
             global_hotkey: "Alt+Space".to_string(),
             input_device: None,
+            theme_mode: ThemeMode::default(),
         }
     }
 
