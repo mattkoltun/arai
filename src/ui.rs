@@ -2171,12 +2171,15 @@ fn view_setup_tab(
         .padding([6, 10])
         .on_press(Message::ThemeModeChanged(variant))
     };
-    let theme_selector = row![
+    let mut theme_selector = row![
         theme_radio("Dark", ThemeMode::Dark),
         theme_radio("Light", ThemeMode::Light),
-        theme_radio("System", ThemeMode::System),
     ]
     .spacing(6);
+    #[cfg(target_os = "macos")]
+    {
+        theme_selector = theme_selector.push(theme_radio("System", ThemeMode::System));
+    }
     let theme_card = column![
         text("Appearance").size(15).color(current_palette().text),
         theme_selector,
