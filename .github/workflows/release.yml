@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_NAME: arai
+  APP_DISPLAY_NAME: Arai
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+    - name: Install system dependencies
+      run: brew install cmake create-dmg
+
+    - name: Install cargo-bundle
+      run: cargo install cargo-bundle
+
+    - name: Extract version from tag
+      id: version
+      run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+    - name: Build ARM64 (Apple Silicon)
+      run: cargo build --release --target aarch64-apple-darwin
+
+    - name: Build x86_64 (Intel)
+      run: cargo build --release --target x86_64-apple-darwin
+
+    - name: Create universal binary
+      run: |
+        mkdir -p target/universal-apple-darwin/release
+        lipo -create \
+          target/aarch64-apple-darwin/release/$APP_NAME \
+          target/x86_64-apple-darwin/release/$APP_NAME \
+          -output target/universal-apple-darwin/release/$APP_NAME
+
+    - name: Create .app bundle
+      run: cargo bundle --release --target aarch64-apple-darwin
+
+    - name: Replace bundle binary with universal binary
+      run: |
+        APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
+        cp target/universal-apple-darwin/release/$APP_NAME "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+
+    - name: Code sign .app bundle (ad-hoc)
+      run: |
+        APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
+        codesign --force --deep --sign - "$APP_BUNDLE"
+
+    - name: Create .dmg installer
+      run: |
+        VERSION="${{ steps.version.outputs.VERSION }}"
+        APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
+        DMG_PATH="dist/${APP_DISPLAY_NAME}-${VERSION}-macos-universal.dmg"
+        mkdir -p dist
+
+        VOLICON_ARGS=()
+        if [[ -f assets/images/logo.icns ]]; then
+          VOLICON_ARGS=(--volicon assets/images/logo.icns)
+        fi
+
+        create-dmg \
+          --volname "$APP_DISPLAY_NAME" \
+          "${VOLICON_ARGS[@]}" \
+          --window-pos 200 120 \
+          --window-size 600 400 \
+          --icon-size 100 \
+          --icon "${APP_DISPLAY_NAME}.app" 175 190 \
+          --app-drop-link 425 190 \
+          --no-internet-enable \
+          "$DMG_PATH" \
+          "$APP_BUNDLE" || true
+
+        hdiutil detach "/Volumes/$APP_DISPLAY_NAME" 2>/dev/null || true
+
+    - name: Create architecture tarballs
+      run: |
+        VERSION="${{ steps.version.outputs.VERSION }}"
+        mkdir -p dist
+        for arch in aarch64 x86_64; do
+          tar -czf "dist/${APP_NAME}-${VERSION}-macos-${arch}.tar.gz" \
+            -C "target/${arch}-apple-darwin/release" "$APP_NAME"
+        done
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        generate_release_notes: true
+        files: |
+          dist/*.dmg
+          dist/*.tar.gz

@@ -2,29 +2,17 @@
 set -euo pipefail
 
 # Release script for Arai — builds, bundles, and packages for distribution.
+# Currently macOS-only; Linux and Windows are not yet supported.
 #
 # Usage:
-#   ./scripts/release.sh              # release all platforms
-#   ./scripts/release.sh macos        # macOS only (.app + .dmg + universal binary)
-#   ./scripts/release.sh linux        # Linux only (tarballs per architecture)
-#   ./scripts/release.sh windows      # Windows only (zip per architecture)
+#   ./scripts/release.sh
 #
 # Prerequisites:
 #   cargo install cargo-bundle
-#   brew install create-dmg           # macOS packaging
+#   brew install create-dmg
 #
 #   # Cross-compilation targets:
-#   rustup target add \
-#       aarch64-apple-darwin x86_64-apple-darwin \
-#       x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu armv7-unknown-linux-gnueabihf \
-#       x86_64-pc-windows-gnu aarch64-pc-windows-gnu
-#
-#   # Linux cross-compilation (from macOS):
-#   brew tap messense/macos-cross-toolchains
-#   brew install x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu arm-unknown-linux-gnueabihf
-#
-#   # Windows cross-compilation (from macOS):
-#   brew install mingw-w64
+#   rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$PROJECT_ROOT/dist"
@@ -48,39 +36,12 @@ check_command() {
     fi
 }
 
-set_cross_linker() {
-    local target="$1"
-    case "$target" in
-        x86_64-unknown-linux-gnu)
-            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="x86_64-unknown-linux-gnu-gcc"
-            export CC_x86_64_unknown_linux_gnu="x86_64-unknown-linux-gnu-gcc"
-            ;;
-        aarch64-unknown-linux-gnu)
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="aarch64-unknown-linux-gnu-gcc"
-            export CC_aarch64_unknown_linux_gnu="aarch64-unknown-linux-gnu-gcc"
-            ;;
-        armv7-unknown-linux-gnueabihf)
-            export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER="arm-unknown-linux-gnueabihf-gcc"
-            export CC_armv7_unknown_linux_gnueabihf="arm-unknown-linux-gnueabihf-gcc"
-            ;;
-        x86_64-pc-windows-gnu)
-            export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="x86_64-w64-mingw32-gcc"
-            export CC_x86_64_pc_windows_gnu="x86_64-w64-mingw32-gcc"
-            ;;
-        aarch64-pc-windows-gnu)
-            export CARGO_TARGET_AARCH64_PC_WINDOWS_GNU_LINKER="aarch64-w64-mingw32-gcc"
-            export CC_aarch64_pc_windows_gnu="aarch64-w64-mingw32-gcc"
-            ;;
-    esac
-}
-
 build_binary() {
     local target="$1"
     local label="$2"
 
     echo ""
     echo "==> Building $label ($target)"
-    set_cross_linker "$target"
     cargo build --release --target "$target" --manifest-path "$PROJECT_ROOT/Cargo.toml"
 }
 
@@ -165,71 +126,9 @@ release_macos() {
     done
 }
 
-# ── Linux ────────────────────────────────────────────────────────────
-
-release_linux() {
-    echo ""
-    echo "── Linux ──────────────────────────────────"
-
-    local targets=(
-        "x86_64-unknown-linux-gnu:linux-amd64"
-        "aarch64-unknown-linux-gnu:linux-arm64"
-        "armv7-unknown-linux-gnueabihf:linux-armv7"
-    )
-
-    for entry in "${targets[@]}"; do
-        local target="${entry%%:*}"
-        local label="${entry##*:}"
-
-        build_binary "$target" "Linux $label"
-
-        local tarball="$DIST_DIR/${APP_NAME}-${VERSION}-${label}.tar.gz"
-        tar -czf "$tarball" -C "$PROJECT_ROOT/target/$target/release" "$APP_NAME"
-        echo "    -> $tarball"
-    done
-}
-
-# ── Windows ──────────────────────────────────────────────────────────
-
-release_windows() {
-    echo ""
-    echo "── Windows ────────────────────────────────"
-
-    local targets=(
-        "x86_64-pc-windows-gnu:windows-amd64"
-        "aarch64-pc-windows-gnu:windows-arm64"
-    )
-
-    for entry in "${targets[@]}"; do
-        local target="${entry%%:*}"
-        local label="${entry##*:}"
-
-        build_binary "$target" "Windows $label"
-
-        local zipfile="$DIST_DIR/${APP_NAME}-${VERSION}-${label}.zip"
-        (cd "$PROJECT_ROOT/target/$target/release" && zip -q "$zipfile" "${APP_NAME}.exe")
-        echo "    -> $zipfile"
-    done
-}
-
 # ── Main ─────────────────────────────────────────────────────────────
 
-filter="${1:-all}"
-
-case "$filter" in
-    macos)   release_macos ;;
-    linux)   release_linux ;;
-    windows) release_windows ;;
-    all)
-        release_macos
-        release_linux
-        release_windows
-        ;;
-    *)
-        echo "Usage: $0 [macos|linux|windows|all]"
-        exit 1
-        ;;
-esac
+release_macos
 
 echo ""
 echo "=========================================="
