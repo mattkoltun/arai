@@ -60,7 +60,7 @@ Flash Attention and Disable Timestamps toggles remain visible (CPU-relevant).
 Add a Linux job to `.github/workflows/rust.yml`:
 
 - `runs-on: ubuntu-latest`
-- System dependencies: `cmake`, `libasound2-dev` (ALSA for cpal), `libdbus-1-dev` (for D-Bus/secret-service keyring), `libsecret-1-dev` (for keyring), `libgtk-3-dev` (for rfd file dialogs)
+- System dependencies: `cmake`, `libasound2-dev` (ALSA for cpal), `libdbus-1-dev` (for D-Bus/secret-service keyring), `libsecret-1-dev` (for keyring), `libgtk-3-dev` (for rfd file dialogs), `libxkbcommon-dev` (for iced keyboard handling)
 - Same steps: build, test, clippy, fmt check
 
 No changes to `release.yml` (Linux release artifacts are out of scope for this work).
