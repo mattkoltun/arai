@@ -6,7 +6,7 @@
 
 Arai is a voice-first prompt and writing assistant. It captures microphone audio, transcribes it locally via Whisper, then transforms the text through OpenAI's API. The result is polished text ready for use in agent prompts, emails, messages, and more.
 
-https://github.com/mattkoltun/arai/raw/main/docs/demo.mp4
+![Demo](docs/demo.gif)
 
 ## Installation
 
