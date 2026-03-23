@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ── Only run for Rust/Cargo changes ──────────────────────────────────
+if ! git diff --cached --name-only | grep -qE '^(src/.*\.rs|Cargo\.toml|Cargo\.lock)$'; then
+    exit 0
+fi
+
 # ── Run cargo fmt and stage any changes ──────────────────────────────
 cargo fmt --quiet
 git diff --name-only --diff-filter=M | while read -r file; do
