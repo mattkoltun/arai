@@ -23,7 +23,15 @@ cd arai
    - **In-app settings:** enter it through the UI on first launch
    - **Config file:** `~/.config/arai/config.yaml` (will be migrated to Keychain automatically)
 
-3. On first launch, Arai will prompt you to download a Whisper model.
+3. Enable the project git hooks:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The pre-commit hook runs `cargo fmt`. The post-commit hook automatically bumps the patch version.
+
+4. On first launch, Arai will prompt you to download a Whisper model.
 
 ## Run
 
