@@ -12,14 +12,14 @@ Arai is a voice-first prompt and writing assistant. It captures microphone audio
 
 ### From GitHub Releases
 
-Download the latest release from the [Releases](https://github.com/mkoltun/arai/releases) page. On macOS, drag `Arai.app` to your Applications folder.
+Download the latest release from the [Releases](https://github.com/mattkoltun/arai/releases) page. On macOS, drag `Arai.app` to your Applications folder.
 
 ### From Source
 
-Requires the [Rust toolchain](https://rustup.rs/) (stable).
+Requires the [Rust toolchain](https://rustup.rs/) (stable) and the [CMAKE](https://cmake.org/download/)
 
 ```bash
-git clone https://github.com/mkoltun/arai.git
+git clone https://github.com/mattkoltun/arai.git
 cd arai
 cargo install --path .
 ```
