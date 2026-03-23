@@ -1,5 +1,9 @@
 # Arai
 
+[![CI](https://github.com/mkoltun/arai/actions/workflows/rust.yml/badge.svg)](https://github.com/mkoltun/arai/actions/workflows/rust.yml)
+[![Release](https://github.com/mkoltun/arai/actions/workflows/release.yml/badge.svg)](https://github.com/mkoltun/arai/actions/workflows/release.yml)
+![Platform: macOS](https://img.shields.io/badge/platform-macOS-blue)
+
 Arai is a voice-first prompt and writing assistant. It captures microphone audio, transcribes it locally via Whisper, then transforms the text through OpenAI's API. The result is polished text ready for use in agent prompts, emails, messages, and more.
 
 ## Installation
