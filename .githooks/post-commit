@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ── Only run for Rust/Cargo changes ──────────────────────────────────
+if ! git diff-tree --no-commit-id --name-only -r HEAD | grep -qE '^(src/.*\.rs|Cargo\.toml|Cargo\.lock)$'; then
+    exit 0
+fi
+
 # Guard against infinite loop — the bump commit will also trigger post-commit.
 LOCK_FILE="$(git rev-parse --git-dir)/post-commit.lock"
 if [[ -f "$LOCK_FILE" ]]; then
