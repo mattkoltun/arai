@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── Run cargo fmt and stage any changes ──────────────────────────────
+cargo fmt --quiet
+git diff --name-only --diff-filter=M | while read -r file; do
+    if [[ "$file" == *.rs ]]; then
+        git add "$file"
+    fi
+done
