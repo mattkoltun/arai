@@ -87,14 +87,37 @@ jobs:
 
         hdiutil detach "/Volumes/$APP_DISPLAY_NAME" 2>/dev/null || true
 
-    - name: Create architecture tarballs
+    - name: Create .app zip
+      run: |
+        VERSION="${{ steps.version.outputs.VERSION }}"
+        APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
+        mkdir -p dist
+        cd "$(dirname "$APP_BUNDLE")"
+        zip -r "$GITHUB_WORKSPACE/dist/${APP_DISPLAY_NAME}-${VERSION}-macos-universal.app.zip" "${APP_DISPLAY_NAME}.app"
+
+    - name: Create architecture tarballs and zips
       run: |
         VERSION="${{ steps.version.outputs.VERSION }}"
         mkdir -p dist
-        for arch in aarch64 x86_64; do
+        for arch in aarch64 x86_64 universal; do
+          BIN="target/${arch}-apple-darwin/release/$APP_NAME"
+
+          # .tar.gz
           tar -czf "dist/${APP_NAME}-${VERSION}-macos-${arch}.tar.gz" \
-            -C "target/${arch}-apple-darwin/release" "$APP_NAME"
+            -C "$(dirname "$BIN")" "$APP_NAME"
+
+          # .tar
+          tar -cf "dist/${APP_NAME}-${VERSION}-macos-${arch}.tar" \
+            -C "$(dirname "$BIN")" "$APP_NAME"
+
+          # .zip
+          zip -j "dist/${APP_NAME}-${VERSION}-macos-${arch}.zip" "$BIN"
         done
+
+    - name: Generate checksums
+      run: |
+        cd dist
+        shasum -a 256 * > SHA256SUMS.txt
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
@@ -103,3 +126,6 @@ jobs:
         files: |
           dist/*.dmg
           dist/*.tar.gz
+          dist/*.tar
+          dist/*.zip
+          dist/SHA256SUMS.txt
