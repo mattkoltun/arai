@@ -13,7 +13,7 @@ This guide covers local setup, running, building, and testing Arai.
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/mkoltun/arai.git
+git clone https://github.com/mattkoltun/arai.git
 cd arai
 ```
 
