@@ -11,7 +11,35 @@ env:
   APP_DISPLAY_NAME: Arai
 
 jobs:
+  verify-release-origin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag comes from a release branch merge
+        run: |
+          COMMIT=$(git rev-list -n 1 ${{ github.ref }})
+          MERGE_MSG=$(git log -1 --format=%s "$COMMIT")
+
+          # Check 1: merge commit from a release/v* branch
+          if echo "$MERGE_MSG" | grep -qE "^Merge pull request .* from .*/release/v"; then
+            echo "Tag is on a release branch merge commit"
+            exit 0
+          fi
+
+          # Check 2: squash-merged release PR (commit message from release-prep)
+          if echo "$MERGE_MSG" | grep -qE "^chore: prepare release v"; then
+            echo "Tag is on a squash-merged release commit"
+            exit 0
+          fi
+
+          echo "::error::Tag does not appear to originate from a release branch merge. Skipping release."
+          exit 1
+
   release:
+    needs: verify-release-origin
     runs-on: macos-latest
 
     permissions:
