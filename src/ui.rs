@@ -244,7 +244,7 @@ impl Ui {
                     config_model_path: String::new(),
                     config_window_seconds: 3.0,
                     config_overlap_seconds: 0.25,
-                    config_silence_threshold: 0.005,
+                    config_silence_threshold: 0.003,
                     config_input_devices: Vec::new(),
                     config_selected_input_device: None,
                     config_global_hotkey: String::new(),
@@ -2080,7 +2080,7 @@ fn view_setup_tab(
 
     let silence_thresh_slider = row![
         slider(
-            0.001..=0.05,
+            0.001..=0.02,
             sf.silence_thresh,
             Message::SilenceThresholdChanged
         )

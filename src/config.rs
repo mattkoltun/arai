@@ -27,7 +27,7 @@ static DEFAULT_MODEL_PATH: LazyLock<String> = LazyLock::new(|| {
 });
 const DEFAULT_WINDOW_SECONDS: f32 = 3.0;
 const DEFAULT_OVERLAP_SECONDS: f32 = 0.25;
-const DEFAULT_SILENCE_THRESHOLD: f32 = 0.005;
+const DEFAULT_SILENCE_THRESHOLD: f32 = 0.003;
 const DEFAULT_GLOBAL_HOTKEY: &str = "Alt+Space";
 
 /// Controls the application color scheme.

@@ -12,6 +12,8 @@ use whisper_rs::{
 
 /// Target sample rate required by the Whisper model.
 const TARGET_SAMPLE_RATE: u32 = 16_000;
+/// Streaming transcription gets brittle above this RMS threshold on laptop mics.
+const MAX_STREAMING_SILENCE_THRESHOLD: f32 = 0.005;
 
 #[derive(Debug)]
 pub enum TranscriberError {
@@ -137,6 +139,8 @@ fn worker(
 
     info!("Transcriber ready");
     let mut buffer = Vec::new();
+    let streaming_silence_threshold =
+        effective_streaming_silence_threshold(config.silence_threshold);
     while let Ok(chunk) = audio_rx.recv() {
         if stop_flag.load(Ordering::SeqCst) {
             debug!("Transcriber stop flag set, exiting");
@@ -164,15 +168,16 @@ fn worker(
         if buffer.len() >= window_samples || is_final {
             let energy = rms_energy(&buffer);
             debug!(
-                "Energy gate: rms={:.6}, threshold={}, buffer_samples={}, is_final={}",
+                "Energy gate: rms={:.6}, threshold={}, configured_threshold={}, buffer_samples={}, is_final={}",
                 energy,
+                streaming_silence_threshold,
                 config.silence_threshold,
                 buffer.len(),
                 is_final
             );
-            if energy < config.silence_threshold {
+            if energy < streaming_silence_threshold {
                 debug!("Audio below silence threshold, skipping transcription");
-                buffer.clear();
+                trim_streaming_buffer(&mut buffer, overlap_samples, is_final);
             } else {
                 match transcribe_audio(&ctx, &buffer, config.no_timestamps) {
                     Ok(text) => {
@@ -193,12 +198,7 @@ fn worker(
                     }
                 }
 
-                if is_final || overlap_samples == 0 || buffer.len() <= overlap_samples {
-                    buffer.clear();
-                } else {
-                    let start = buffer.len() - overlap_samples;
-                    buffer.drain(0..start);
-                }
+                trim_streaming_buffer(&mut buffer, overlap_samples, is_final);
             }
 
             // Signal the controller that all buffered audio has been processed.
@@ -211,6 +211,22 @@ fn worker(
             }
         }
     }
+}
+
+/// Caps the live silence gate to avoid suppressing normal speech on quieter mics.
+fn effective_streaming_silence_threshold(configured: f32) -> f32 {
+    configured.min(MAX_STREAMING_SILENCE_THRESHOLD)
+}
+
+/// Keeps only the overlap tail between live windows unless the stream ended.
+fn trim_streaming_buffer(buffer: &mut Vec<f32>, overlap_samples: usize, is_final: bool) {
+    if is_final || overlap_samples == 0 || buffer.len() <= overlap_samples {
+        buffer.clear();
+        return;
+    }
+
+    let start = buffer.len() - overlap_samples;
+    buffer.drain(0..start);
 }
 
 /// Transcribes an entire WAV file in one pass using Whisper. Reads the file,
@@ -499,5 +515,29 @@ mod tests {
     fn rms_energy_low_for_quiet_audio() {
         let quiet = vec![0.001f32; 1600];
         assert!(rms_energy(&quiet) < 0.01);
+    }
+
+    #[test]
+    fn effective_streaming_threshold_caps_high_configured_values() {
+        assert_eq!(effective_streaming_silence_threshold(0.01), 0.005);
+    }
+
+    #[test]
+    fn effective_streaming_threshold_preserves_lower_values() {
+        assert_eq!(effective_streaming_silence_threshold(0.003), 0.003);
+    }
+
+    #[test]
+    fn trim_streaming_buffer_keeps_overlap_for_non_final_windows() {
+        let mut buffer = vec![0.0; 100];
+        trim_streaming_buffer(&mut buffer, 25, false);
+        assert_eq!(buffer.len(), 25);
+    }
+
+    #[test]
+    fn trim_streaming_buffer_clears_final_window() {
+        let mut buffer = vec![0.0; 100];
+        trim_streaming_buffer(&mut buffer, 25, true);
+        assert!(buffer.is_empty());
     }
 }

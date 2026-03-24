@@ -52,6 +52,7 @@ Recorder (cpal) → AudioChunk → Transcriber (whisper) → text → Agent (Ope
 - Rust 2024 edition, 4-space indent
 - snake_case (functions/modules), CamelCase (types/traits), SCREAMING_SNAKE_CASE (constants)
 - Run `cargo fmt` before commits; clippy warnings are errors
+- Never commit directly on the `main` branch unless the user explicitly instructs you to do so.
 - Conventional Commits: `feat:`, `fix:`, `test:`, `docs:`, etc.
 - Unit tests go in `#[cfg(test)]` modules alongside code; name with behavior-first labels (e.g., `handles_empty_input`)
 - Keep `main.rs` thin; move logic to dedicated modules
