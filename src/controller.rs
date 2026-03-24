@@ -1,6 +1,6 @@
 use crate::agent::Agent;
 use crate::app_state::AppStateHandle;
-use crate::channels::{AppEventReceiver, AppEventSender, UiUpdateSender};
+use crate::channels::{AppEventReceiver, AppEventSender, AudioChannels, UiUpdateSender};
 use crate::config::TranscriberConfig;
 use crate::history::History;
 use crate::messages::{AppEvent, AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
@@ -162,7 +162,7 @@ impl Controller {
         self.transcriber.stop();
         // Drop the old transcriber to join its worker thread.
         let old = std::mem::replace(&mut self.transcriber, {
-            let (audio_tx, audio_rx) = std::sync::mpsc::channel();
+            let AudioChannels { audio_tx, audio_rx } = AudioChannels::new();
             self.recorder.set_audio_tx(audio_tx);
             Transcriber::new(audio_rx, self.app_event_tx.clone(), config)
         });
