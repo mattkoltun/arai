@@ -2,23 +2,30 @@
 set -euo pipefail
 
 # Release script for Arai — builds, bundles, and packages for distribution.
-# Currently macOS-only; Linux and Windows are not yet supported.
 #
 # Usage:
-#   ./scripts/release.sh
+#   ./scripts/release.sh [release-macos|release-linux]
+#
+# Configurable targets:
+#   MACOS_TARGETS="aarch64-apple-darwin:arm64,x86_64-apple-darwin:x86_64"
+#   LINUX_TARGETS="x86_64-unknown-linux-gnu:x86_64,aarch64-unknown-linux-gnu:arm64"
 #
 # Prerequisites:
 #   cargo install cargo-bundle
 #   brew install create-dmg
 #
 #   # Cross-compilation targets:
-#   rustup target add aarch64-apple-darwin x86_64-apple-darwin
+#   rustup target add aarch64-apple-darwin x86_64-apple-darwin \
+#     x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$PROJECT_ROOT/dist"
 APP_NAME="arai"
 APP_DISPLAY_NAME="Arai"
 VERSION=$(grep '^version' "$PROJECT_ROOT/Cargo.toml" | head -1 | sed 's/.*"\(.*\)"/\1/')
+
+MACOS_TARGETS="${MACOS_TARGETS:-aarch64-apple-darwin:arm64,x86_64-apple-darwin:x86_64}"
+LINUX_TARGETS="${LINUX_TARGETS:-x86_64-unknown-linux-gnu:x86_64,aarch64-unknown-linux-gnu:arm64}"
 
 echo "Building $APP_DISPLAY_NAME v$VERSION"
 echo "=========================================="
@@ -45,51 +52,87 @@ build_binary() {
     cargo build --release --target "$target" --manifest-path "$PROJECT_ROOT/Cargo.toml"
 }
 
+split_target_specs() {
+    local specs="$1"
+    local -n out_ref="$2"
+    IFS=',' read -r -a out_ref <<< "$specs"
+}
+
+target_path() {
+    local target="$1"
+    echo "$PROJECT_ROOT/target/$target/release/$APP_NAME"
+}
+
+archive_binary() {
+    local binary_path="$1"
+    local archive_base="$2"
+
+    tar -czf "${archive_base}.tar.gz" -C "$(dirname "$binary_path")" "$APP_NAME"
+    tar -cf "${archive_base}.tar" -C "$(dirname "$binary_path")" "$APP_NAME"
+    zip -j "${archive_base}.zip" "$binary_path" >/dev/null
+
+    echo "    -> ${archive_base}.tar.gz"
+    echo "    -> ${archive_base}.tar"
+    echo "    -> ${archive_base}.zip"
+}
+
 # ── macOS ────────────────────────────────────────────────────────────
 
 release_macos() {
+    local targets=()
+    split_target_specs "$MACOS_TARGETS" targets
+
+    if [[ ${#targets[@]} -lt 2 ]]; then
+        echo "Error: MACOS_TARGETS must contain at least two target:label entries."
+        exit 1
+    fi
+
     echo ""
     echo "── macOS ──────────────────────────────────"
     check_command "cargo-bundle" "Install with: cargo install cargo-bundle"
     check_command "create-dmg" "Install with: brew install create-dmg"
 
-    # 1. Build both architectures
-    build_binary "aarch64-apple-darwin" "macOS ARM64 (Apple Silicon)"
-    build_binary "x86_64-apple-darwin" "macOS x86_64 (Intel)"
+    local bundle_target=""
+    local universal_target="universal-apple-darwin"
+    local universal_bin="$PROJECT_ROOT/target/$universal_target/release/$APP_NAME"
+    local lipo_inputs=()
 
-    # 2. Create universal binary
+    for spec in "${targets[@]}"; do
+        IFS=':' read -r target label <<< "$spec"
+        if [[ -z "$target" || -z "$label" ]]; then
+            echo "Error: Invalid macOS target spec '$spec'. Expected target:label."
+            exit 1
+        fi
+        build_binary "$target" "macOS ${label}"
+        lipo_inputs+=("$(target_path "$target")")
+        if [[ -z "$bundle_target" ]]; then
+            bundle_target="$target"
+        fi
+    done
+
     echo ""
     echo "==> Creating universal binary"
-    local universal_bin="$PROJECT_ROOT/target/universal-apple-darwin/release/$APP_NAME"
     mkdir -p "$(dirname "$universal_bin")"
-    lipo -create \
-        "$PROJECT_ROOT/target/aarch64-apple-darwin/release/$APP_NAME" \
-        "$PROJECT_ROOT/target/x86_64-apple-darwin/release/$APP_NAME" \
-        -output "$universal_bin"
+    lipo -create "${lipo_inputs[@]}" -output "$universal_bin"
 
-    # 3. Create .app bundle using cargo-bundle (builds for host arch)
     echo ""
     echo "==> Creating .app bundle"
-    cargo bundle --release --target aarch64-apple-darwin
+    cargo bundle --release --target "$bundle_target"
 
-    local app_bundle="$PROJECT_ROOT/target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
+    local app_bundle="$PROJECT_ROOT/target/$bundle_target/release/bundle/osx/${APP_DISPLAY_NAME}.app"
 
-    # Replace the binary in the bundle with the universal one
     cp "$universal_bin" "$app_bundle/Contents/MacOS/$APP_NAME"
     echo "    -> $app_bundle (universal binary)"
 
-    # Ad-hoc sign the bundle so macOS can persist permission grants (microphone etc.)
     echo ""
     echo "==> Code signing .app bundle (ad-hoc)"
     codesign --force --deep --sign - "$app_bundle"
     echo "    -> Signed"
 
-    # 4. Create .dmg
     echo ""
     echo "==> Creating .dmg installer"
     local dmg_path="$DIST_DIR/${APP_DISPLAY_NAME}-${VERSION}-macos-universal.dmg"
 
-    # create-dmg returns non-zero if it can't set the icon, which is fine
     local volicon_args=()
     local logo_icns="$PROJECT_ROOT/assets/images/logo.icns"
     if [[ -f "$logo_icns" ]]; then
@@ -108,7 +151,6 @@ release_macos() {
         "$dmg_path" \
         "$app_bundle" || true
 
-    # Eject any volumes left mounted by create-dmg.
     hdiutil detach "/Volumes/$APP_DISPLAY_NAME" 2>/dev/null || true
 
     if [[ -f "$dmg_path" ]]; then
@@ -118,17 +160,76 @@ release_macos() {
         cp -r "$app_bundle" "$DIST_DIR/"
     fi
 
-    # 5. Also output standalone binaries as tarballs
-    for arch in aarch64 x86_64; do
-        local tarball="$DIST_DIR/${APP_NAME}-${VERSION}-macos-${arch}.tar.gz"
-        tar -czf "$tarball" -C "$PROJECT_ROOT/target/${arch}-apple-darwin/release" "$APP_NAME"
-        echo "    -> $tarball"
+    local app_zip="$DIST_DIR/${APP_DISPLAY_NAME}-${VERSION}-macos-universal.app.zip"
+    (
+        cd "$(dirname "$app_bundle")"
+        zip -r "$app_zip" "${APP_DISPLAY_NAME}.app" >/dev/null
+    )
+    echo "    -> $app_zip"
+
+    for spec in "${targets[@]}"; do
+        IFS=':' read -r target label <<< "$spec"
+        archive_binary "$(target_path "$target")" "$DIST_DIR/${APP_NAME}-${VERSION}-macos-${label}"
     done
+    archive_binary "$universal_bin" "$DIST_DIR/${APP_NAME}-${VERSION}-macos-universal"
+}
+
+# ── Linux ────────────────────────────────────────────────────────────
+
+release_linux() {
+    local targets=()
+    split_target_specs "$LINUX_TARGETS" targets
+
+    if [[ ${#targets[@]} -eq 0 ]]; then
+        echo "Error: LINUX_TARGETS must contain at least one target:label entry."
+        exit 1
+    fi
+
+    echo ""
+    echo "── Linux ──────────────────────────────────"
+
+    for spec in "${targets[@]}"; do
+        IFS=':' read -r target label <<< "$spec"
+        if [[ -z "$target" || -z "$label" ]]; then
+            echo "Error: Invalid Linux target spec '$spec'. Expected target:label."
+            exit 1
+        fi
+        build_binary "$target" "Linux ${label}"
+        archive_binary "$(target_path "$target")" "$DIST_DIR/${APP_NAME}-${VERSION}-linux-${label}"
+    done
+}
+
+usage() {
+    cat <<EOF
+Usage: ./scripts/release.sh [release-macos|release-linux]
+
+Environment overrides:
+  MACOS_TARGETS=target:label,target:label
+  LINUX_TARGETS=target:label,target:label
+EOF
 }
 
 # ── Main ─────────────────────────────────────────────────────────────
 
-release_macos
+command="${1:-release-macos}"
+
+case "$command" in
+    release-macos)
+        release_macos
+        ;;
+    release-linux)
+        release_linux
+        ;;
+    -h|--help|help)
+        usage
+        exit 0
+        ;;
+    *)
+        echo "Error: Unknown command '$command'."
+        usage
+        exit 1
+        ;;
+esac
 
 echo ""
 echo "=========================================="

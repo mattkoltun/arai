@@ -52,10 +52,14 @@ Recorder (cpal) → AudioChunk → Transcriber (whisper) → text → Agent (Ope
 - Rust 2024 edition, 4-space indent
 - snake_case (functions/modules), CamelCase (types/traits), SCREAMING_SNAKE_CASE (constants)
 - Run `cargo fmt` before commits; clippy warnings are errors
+- Never commit directly on the `main` branch unless the user explicitly instructs you to do so.
 - Conventional Commits: `feat:`, `fix:`, `test:`, `docs:`, etc.
 - Unit tests go in `#[cfg(test)]` modules alongside code; name with behavior-first labels (e.g., `handles_empty_input`)
 - Keep `main.rs` thin; move logic to dedicated modules
 - Add `///` doc comments to all public structs, impl blocks, and functions. Update existing doc comments when changing behavior.
+- When changing source code under `src/` or other shipped code paths, update `CHANGELOG.md` in the same task before finishing.
+- Add changelog notes under `## [Unreleased]` using concise entries grouped under headings such as `Added`, `Changed`, `Fixed`, `Removed`, `Security`, or `Deprecated`.
+- Do not add changelog entries for docs-only, comment-only, test-only, CI-only, or tooling-only changes unless they materially affect shipped behavior.
 
 ## Configuration
 

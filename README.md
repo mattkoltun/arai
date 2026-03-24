@@ -4,7 +4,7 @@
 [![Release](https://github.com/mattkoltun/arai/actions/workflows/release.yml/badge.svg)](https://github.com/mattkoltun/arai/actions/workflows/release.yml)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS-blue)
 
-Arai is a voice-first prompt and writing assistant. It captures microphone audio, transcribes it locally via Whisper, then transforms the text through OpenAI's API. The result is polished text ready for use in agent prompts, emails, messages, and more.
+Arai is a voice-first prompt and writing assistant built for power users who want to speed up their workflows. It captures microphone audio, transcribes it locally via Whisper, then transforms the text through OpenAI's API. The result is polished text ready for use in agent prompts, emails, messages, and more.
 
 ![Demo](docs/demo.gif)
 
@@ -38,11 +38,10 @@ Example:
 log_level: debug
 log_path: /tmp/arai.log
 global_hotkey: Alt+Space
-default_prompt: 0
 input_device: MacBook Pro Microphone
 theme_mode: dark
 agent_prompts:
-  - name: default
+  - name: editor
     instruction: Rewrite the user text for clarity and brevity while preserving meaning.
   - name: agent prompt
     instruction: >-
@@ -55,11 +54,12 @@ agent_prompts:
       Convert the user text into a single shell command or short pipeline that
       accomplishes what was described. Output only the command, with no explanation
       or surrounding text. It should be ready to copy and paste into a terminal.
+default_prompt: 0
 transcriber:
   model_path: ~/.local/share/arai/models/ggml-small.en.bin
   window_seconds: 3.0
   overlap_seconds: 0.25
-  silence_threshold: 0.005
+  silence_threshold: 0.003
   use_gpu: true
   flash_attn: true
   no_timestamps: true
@@ -84,9 +84,6 @@ transcriber:
 | `transcriber.flash_attn` | `true` | Enable flash attention for faster inference. |
 | `transcriber.no_timestamps` | `true` | Disable timestamp tokens in Whisper output. |
 
-The default agent prompt is:
-
-> Rewrite the user text for clarity and brevity while preserving meaning.
 
 ### API Key Storage
 

@@ -41,12 +41,6 @@ fn show_app() {
     app.activateIgnoringOtherApps(true);
 }
 
-#[cfg(not(target_os = "macos"))]
-fn hide_app() {}
-
-#[cfg(not(target_os = "macos"))]
-fn show_app() {}
-
 /// Resolves the active palette from the current theme mode.
 fn active_palette(mode: &ThemeMode, system_dark: bool) -> AppPalette {
     match mode {
@@ -250,7 +244,7 @@ impl Ui {
                     config_model_path: String::new(),
                     config_window_seconds: 3.0,
                     config_overlap_seconds: 0.25,
-                    config_silence_threshold: 0.005,
+                    config_silence_threshold: 0.003,
                     config_input_devices: Vec::new(),
                     config_selected_input_device: None,
                     config_global_hotkey: String::new(),
@@ -405,6 +399,7 @@ enum Message {
     Undo,
     Redo,
     SelectActivePrompt(usize),
+    #[cfg(target_os = "macos")]
     UseGpuToggled(bool),
     FlashAttnToggled(bool),
     NoTimestampsToggled(bool),
@@ -510,6 +505,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
 
             if hotkey_fired {
+                #[cfg(target_os = "macos")]
                 show_app();
                 if let Some(id) = state.window_id {
                     window::gain_focus(id)
@@ -677,8 +673,21 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             });
             state.input.clear();
             state.editor = text_editor::Content::new();
+            #[cfg(target_os = "macos")]
             hide_app();
-            iced::clipboard::write::<Message>(text)
+            let clipboard_task = iced::clipboard::write::<Message>(text);
+            #[cfg(target_os = "macos")]
+            {
+                clipboard_task
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Some(id) = state.window_id {
+                    Task::batch([window::minimize(id, true), clipboard_task])
+                } else {
+                    clipboard_task
+                }
+            }
         }
         Message::OpenConfig => {
             state.config_prompts = state
@@ -845,6 +854,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_selected_input_device = Some(value);
             Task::none()
         }
+        #[cfg(target_os = "macos")]
         Message::UseGpuToggled(value) => {
             state.config_use_gpu = value;
             Task::none()
@@ -1105,7 +1115,12 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     update(state, Message::Undo)
                 }
                 keyboard::Key::Character(ref c) if c.as_str() == "w" && modifiers.command() => {
+                    #[cfg(target_os = "macos")]
                     hide_app();
+                    #[cfg(not(target_os = "macos"))]
+                    if let Some(id) = state.window_id {
+                        return window::minimize(id, true);
+                    }
                     Task::none()
                 }
                 keyboard::Key::Character(ref c)
@@ -2067,7 +2082,7 @@ fn view_setup_tab(
 
     let silence_thresh_slider = row![
         slider(
-            0.001..=0.05,
+            0.001..=0.02,
             sf.silence_thresh,
             Message::SilenceThresholdChanged
         )
@@ -2158,10 +2173,17 @@ fn view_setup_tab(
         .padding([6, 10])
         .on_press(Message::ThemeModeChanged(variant))
     };
+    #[cfg(target_os = "macos")]
     let theme_selector = row![
         theme_radio("Dark", ThemeMode::Dark),
         theme_radio("Light", ThemeMode::Light),
-        theme_radio("System", ThemeMode::System),
+    ]
+    .spacing(6)
+    .push(theme_radio("System", ThemeMode::System));
+    #[cfg(not(target_os = "macos"))]
+    let theme_selector = row![
+        theme_radio("Dark", ThemeMode::Dark),
+        theme_radio("Light", ThemeMode::Light),
     ]
     .spacing(6);
     let theme_card = column![
@@ -2263,13 +2285,6 @@ fn view_instructions_tab<'a>(
 }
 
 fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
-    let gpu_toggle = toggler(state.config_use_gpu)
-        .label("GPU Acceleration")
-        .on_toggle(Message::UseGpuToggled)
-        .text_size(13)
-        .spacing(10)
-        .size(20);
-
     let flash_attn_toggle = toggler(state.config_flash_attn)
         .label("Flash Attention")
         .on_toggle(Message::FlashAttnToggled)
@@ -2284,17 +2299,34 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
         .spacing(10)
         .size(20);
 
-    let gpu_card = column![
+    let mut card = column![
         text("Model Inference")
             .size(15)
             .color(current_palette().text),
-        column![
-            text("Enable Metal GPU for faster inference on Apple Silicon.")
-                .size(11)
-                .color(current_palette().muted),
-            gpu_toggle,
-        ]
-        .spacing(6),
+    ]
+    .spacing(12)
+    .padding(14);
+
+    #[cfg(target_os = "macos")]
+    {
+        let gpu_toggle = toggler(state.config_use_gpu)
+            .label("GPU Acceleration")
+            .on_toggle(Message::UseGpuToggled)
+            .text_size(13)
+            .spacing(10)
+            .size(20);
+        card = card.push(
+            column![
+                text("Enable Metal GPU for faster inference on Apple Silicon.")
+                    .size(11)
+                    .color(current_palette().muted),
+                gpu_toggle,
+            ]
+            .spacing(6),
+        );
+    }
+
+    card = card.push(
         column![
             text("Use flash attention for reduced memory and faster decoding.")
                 .size(11)
@@ -2302,6 +2334,9 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
             flash_attn_toggle,
         ]
         .spacing(6),
+    );
+
+    card = card.push(
         column![
             text("Skip timestamp computation for faster output.")
                 .size(11)
@@ -2309,11 +2344,9 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
             no_timestamps_toggle,
         ]
         .spacing(6),
-    ]
-    .spacing(12)
-    .padding(14);
+    );
 
-    column![container(gpu_card).style(surface_container).width(Fill)]
+    column![container(card).style(surface_container).width(Fill)]
         .spacing(12)
         .padding(14)
 }
