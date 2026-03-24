@@ -1,0 +1,56 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.15.0)"
+        required: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version format. Use semver (e.g. 0.15.0)"
+            exit 1
+          fi
+
+      - name: Check that release branch does not already exist
+        run: |
+          if git ls-remote --exit-code origin "refs/heads/release/v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Branch release/v${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Update Cargo.toml version
+        run: sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
+
+      - name: Finalize changelog
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          sed -i "s/^## \[Unreleased\]/## [Unreleased]\n\n## [${{ inputs.version }}] - $DATE/" CHANGELOG.md
+
+      - name: Create release PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: release/v${{ inputs.version }}
+          commit-message: "chore: prepare release v${{ inputs.version }}"
+          title: "Release v${{ inputs.version }}"
+          body: |
+            Automated release preparation for **v${{ inputs.version }}**.
+
+            Changes:
+            - Bumped `Cargo.toml` version to `${{ inputs.version }}`
+            - Finalized changelog with release date
+
+            Once this PR is merged, the release tag will be created automatically and the build will start.
