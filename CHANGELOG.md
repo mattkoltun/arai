@@ -12,3 +12,6 @@ The format is based on Keep a Changelog and uses an `Unreleased` section that sh
 
 ### Changed
 - Added and tuned a configurable silence threshold for transcription gating so quiet or silent input is skipped more reliably during live capture.
+
+### Fixed
+- Fixed Linux CI failures by aligning platform-specific UI code with conditional compilation so Linux builds pass with `-D warnings`.

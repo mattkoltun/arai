@@ -399,6 +399,7 @@ enum Message {
     Undo,
     Redo,
     SelectActivePrompt(usize),
+    #[cfg(target_os = "macos")]
     UseGpuToggled(bool),
     FlashAttnToggled(bool),
     NoTimestampsToggled(bool),
@@ -853,6 +854,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_selected_input_device = Some(value);
             Task::none()
         }
+        #[cfg(target_os = "macos")]
         Message::UseGpuToggled(value) => {
             state.config_use_gpu = value;
             Task::none()
@@ -2171,15 +2173,19 @@ fn view_setup_tab(
         .padding([6, 10])
         .on_press(Message::ThemeModeChanged(variant))
     };
-    let mut theme_selector = row![
+    #[cfg(target_os = "macos")]
+    let theme_selector = row![
+        theme_radio("Dark", ThemeMode::Dark),
+        theme_radio("Light", ThemeMode::Light),
+    ]
+    .spacing(6)
+    .push(theme_radio("System", ThemeMode::System));
+    #[cfg(not(target_os = "macos"))]
+    let theme_selector = row![
         theme_radio("Dark", ThemeMode::Dark),
         theme_radio("Light", ThemeMode::Light),
     ]
     .spacing(6);
-    #[cfg(target_os = "macos")]
-    {
-        theme_selector = theme_selector.push(theme_radio("System", ThemeMode::System));
-    }
     let theme_card = column![
         text("Appearance").size(15).color(current_palette().text),
         theme_selector,
