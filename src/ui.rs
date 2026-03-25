@@ -17,7 +17,7 @@ use iced::{
 use log::debug;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Hides the application and returns focus to the previously active app.
 #[cfg(target_os = "macos")]
@@ -283,6 +283,9 @@ impl Ui {
                     showing_error_detail: false,
                     history_open: false,
                     history_entries: Vec::new(),
+                    recording_started_at: None,
+                    last_recording_duration: Duration::ZERO,
+                    last_recording_file_size_bytes: None,
                 },
                 Task::none(),
             )
@@ -372,6 +375,12 @@ struct UiRuntime {
     history_open: bool,
     /// Loaded history entries for the viewer (newest first).
     history_entries: Vec<HistoryRecord>,
+    /// Wall-clock start time of the active recording, if any.
+    recording_started_at: Option<Instant>,
+    /// Duration of the most recent recording session.
+    last_recording_duration: Duration,
+    /// Size of the most recently saved recording file in bytes.
+    last_recording_file_size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -450,12 +459,18 @@ impl UiRuntime {
             self.send_event(AppEventKind::UiStopListening);
             self.mode = AppMode::Reconciling;
             self.status_line = "Reconciling...".to_string();
+            if let Some(started_at) = self.recording_started_at.take() {
+                self.last_recording_duration = started_at.elapsed();
+            }
             play_blip();
         } else {
             debug!("UI starting listen");
             self.send_event(AppEventKind::UiStartListening(self.input.clone()));
             self.mode = AppMode::Listening;
             self.status_line = "Listening...".to_string();
+            self.recording_started_at = Some(Instant::now());
+            self.last_recording_duration = Duration::ZERO;
+            self.last_recording_file_size_bytes = None;
             play_blip();
         }
     }
@@ -546,6 +561,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                         state.input = text;
                         state.status_line = "Listening...".to_string();
                     }
+                }
+                UiUpdate::RecordingFinished { file_size_bytes } => {
+                    state.last_recording_file_size_bytes = file_size_bytes;
                 }
                 UiUpdate::AgentResponseReceived(text) => {
                     state.processed_text = Some(text.clone());
@@ -1286,6 +1304,71 @@ fn restore_cursor(content: &mut text_editor::Content, line: usize, col: usize) {
     }
 }
 
+/// Returns an approximate token count for the current editor text.
+fn estimate_token_count(text: &str) -> usize {
+    let mut tokens = 0usize;
+    let mut current_word_bytes = 0usize;
+
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            tokens += current_word_bytes.div_ceil(4);
+            current_word_bytes = 0;
+        } else if ch.is_ascii_punctuation() {
+            tokens += current_word_bytes.div_ceil(4);
+            current_word_bytes = 0;
+            tokens += 1;
+        } else {
+            current_word_bytes += ch.len_utf8();
+        }
+    }
+
+    tokens + current_word_bytes.div_ceil(4)
+}
+
+/// Returns the live or most recent recording duration for display in the footer.
+fn current_recording_duration(state: &UiRuntime) -> Option<Duration> {
+    if let Some(started_at) = state.recording_started_at {
+        Some(started_at.elapsed())
+    } else if state.last_recording_duration > Duration::ZERO
+        || state.last_recording_file_size_bytes.is_some()
+    {
+        Some(state.last_recording_duration)
+    } else {
+        None
+    }
+}
+
+/// Formats a recording duration as MM:SS or HH:MM:SS.
+fn format_duration(duration: Duration) -> String {
+    let total_seconds = duration.as_secs();
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
+}
+
+/// Formats a byte count using compact binary units.
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 // ── Views ────────────────────────────────────────────────────────────
 
 fn view_wizard_api_key(state: &UiRuntime) -> Element<'_, Message> {
@@ -1565,7 +1648,6 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
                     processing,
                     reconciling,
                     !state.input.trim().is_empty(),
-                    state.input.chars().count(),
                     state.config_api_key_status != ApiKeyStatus::NotSet,
                 )
             }
@@ -1583,7 +1665,6 @@ fn view_main<'a>(
     processing: bool,
     reconciling: bool,
     has_text: bool,
-    char_count: usize,
     has_api_key: bool,
 ) -> Element<'a, Message> {
     // close: E5CD
@@ -1629,9 +1710,17 @@ fn view_main<'a>(
         editor_widget = editor_widget.on_action(Message::EditorAction);
     }
 
-    let char_count_text = text(format!("{} chars", char_count))
+    let token_count_text = text(format!("{} tokens", estimate_token_count(&state.input)))
         .size(12)
         .color(current_palette().muted);
+    let recording_duration = current_recording_duration(state);
+    let recording_meta_text = recording_duration.map(|duration| {
+        let mut label = format_duration(duration);
+        if let Some(size) = state.last_recording_file_size_bytes {
+            label = format!("{} • {}", format_bytes(size), label);
+        }
+        text(label).size(12).color(current_palette().muted)
+    });
 
     // mic: E029=mic, E02B=mic_off
     let mic_btn = if listening {
@@ -1698,9 +1787,15 @@ fn view_main<'a>(
         .spacing(16)
         .align_y(iced::Alignment::Center);
 
+    let mut footer_row =
+        row![container(token_count_text).align_left(Fill)].align_y(iced::Alignment::Center);
+    if let Some(meta) = recording_meta_text {
+        footer_row = footer_row.push(container(meta).align_right(Fill));
+    }
+
     let mut bottom_bar = column![
         container(button_group).center_x(Fill),
-        container(char_count_text).padding([4, 18])
+        container(footer_row).padding([4, 18])
     ]
     .spacing(6);
 
