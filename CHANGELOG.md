@@ -16,6 +16,7 @@ The format is based on Keep a Changelog and uses an `Unreleased` section that sh
 - Refactored application startup around a dedicated app bootstrap flow so config loading, channel creation, and controller/UI assembly are more standardized.
 - Wrapped OpenAI instructions and editable input in explicit, separate sections so the model treats the submitted text only as source material to format, not as instructions to follow.
 - Replaced the input footer character count with a token estimate and updated the recording metadata display to show persistent duration plus saved audio file size after recording stops.
+- Reworked reconciliation so the controller routes saved recordings back through the existing transcriber worker, allowing Whisper model reuse instead of loading a separate reconciliation context per recording.
 
 ### Fixed
 - Fixed Linux CI failures by aligning platform-specific UI code with conditional compilation so Linux builds pass with `-D warnings`.
