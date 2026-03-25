@@ -1,9 +1,11 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.18.0)"
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,149 +13,173 @@ env:
   APP_DISPLAY_NAME: Arai
 
 jobs:
-  verify-release-origin:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Verify tag comes from a release branch merge
-        run: |
-          COMMIT=$(git rev-list -n 1 ${{ github.ref }})
-          MERGE_MSG=$(git log -1 --format=%s "$COMMIT")
-
-          # Check 1: merge commit from a release/v* branch
-          if echo "$MERGE_MSG" | grep -qE "^Merge pull request .* from .*/release/v"; then
-            echo "Tag is on a release branch merge commit"
-            exit 0
-          fi
-
-          # Check 2: squash-merged release PR (commit message from release-prep)
-          if echo "$MERGE_MSG" | grep -qE "^chore: prepare release v"; then
-            echo "Tag is on a squash-merged release commit"
-            exit 0
-          fi
-
-          echo "::error::Tag does not appear to originate from a release branch merge. Skipping release."
-          exit 1
-
   release:
-    needs: verify-release-origin
     runs-on: macos-latest
 
     permissions:
       contents: write
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Verify maintainer permission
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const username = context.actor;
+            const result = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username,
+            });
+            const allowed = new Set(["admin", "maintain"]);
+            const permission = result.data.permission;
+            core.info(`Actor ${username} has permission: ${permission}`);
+            if (!allowed.has(permission)) {
+              core.setFailed(
+                `Only maintainers or admins may run releases. Actor ${username} has permission: ${permission}`
+              );
+            }
 
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
 
-    - name: Install system dependencies
-      run: brew install cmake create-dmg
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version format. Use semver (e.g. 0.18.0)"
+            exit 1
+          fi
 
-    - name: Install cargo-bundle
-      run: cargo install cargo-bundle
+      - name: Check that release tag does not already exist
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ inputs.version }} already exists"
+            exit 1
+          fi
 
-    - name: Extract version from tag
-      id: version
-      run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Update Cargo.toml version
+        run: sed -i '' 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
 
-    - name: Build ARM64 (Apple Silicon)
-      run: cargo build --release --target aarch64-apple-darwin
+      - name: Finalize changelog
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          sed -i '' "s/^## \[Unreleased\]/## [Unreleased]\n\n## [${{ inputs.version }}] - $DATE/" CHANGELOG.md
 
-    - name: Build x86_64 (Intel)
-      run: cargo build --release --target x86_64-apple-darwin
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-    - name: Create universal binary
-      run: |
-        mkdir -p target/universal-apple-darwin/release
-        lipo -create \
-          target/aarch64-apple-darwin/release/$APP_NAME \
-          target/x86_64-apple-darwin/release/$APP_NAME \
-          -output target/universal-apple-darwin/release/$APP_NAME
+      - name: Install system dependencies
+        run: brew install cmake create-dmg
 
-    - name: Create .app bundle
-      run: cargo bundle --release --target aarch64-apple-darwin
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle
 
-    - name: Replace bundle binary with universal binary
-      run: |
-        APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
-        cp target/universal-apple-darwin/release/$APP_NAME "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+      - name: Build ARM64 (Apple Silicon)
+        run: cargo build --release --target aarch64-apple-darwin
 
-    - name: Code sign .app bundle (ad-hoc)
-      run: |
-        APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
-        codesign --force --deep --sign - "$APP_BUNDLE"
+      - name: Build x86_64 (Intel)
+        run: cargo build --release --target x86_64-apple-darwin
 
-    - name: Create .dmg installer
-      run: |
-        VERSION="${{ steps.version.outputs.VERSION }}"
-        APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
-        DMG_PATH="dist/${APP_DISPLAY_NAME}-${VERSION}-macos-universal.dmg"
-        mkdir -p dist
+      - name: Create universal binary
+        run: |
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create \
+            target/aarch64-apple-darwin/release/$APP_NAME \
+            target/x86_64-apple-darwin/release/$APP_NAME \
+            -output target/universal-apple-darwin/release/$APP_NAME
 
-        VOLICON_ARGS=()
-        if [[ -f assets/images/logo.icns ]]; then
-          VOLICON_ARGS=(--volicon assets/images/logo.icns)
-        fi
+      - name: Create .app bundle
+        run: cargo bundle --release --target aarch64-apple-darwin
 
-        create-dmg \
-          --volname "$APP_DISPLAY_NAME" \
-          "${VOLICON_ARGS[@]}" \
-          --window-pos 200 120 \
-          --window-size 600 400 \
-          --icon-size 100 \
-          --icon "${APP_DISPLAY_NAME}.app" 175 190 \
-          --app-drop-link 425 190 \
-          --no-internet-enable \
-          "$DMG_PATH" \
-          "$APP_BUNDLE" || true
+      - name: Replace bundle binary with universal binary
+        run: |
+          APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
+          cp target/universal-apple-darwin/release/$APP_NAME "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
-        hdiutil detach "/Volumes/$APP_DISPLAY_NAME" 2>/dev/null || true
+      - name: Code sign .app bundle (ad-hoc)
+        run: |
+          APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
+          codesign --force --deep --sign - "$APP_BUNDLE"
 
-    - name: Create .app zip
-      run: |
-        VERSION="${{ steps.version.outputs.VERSION }}"
-        APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
-        mkdir -p dist
-        cd "$(dirname "$APP_BUNDLE")"
-        zip -r "$GITHUB_WORKSPACE/dist/${APP_DISPLAY_NAME}-${VERSION}-macos-universal.app.zip" "${APP_DISPLAY_NAME}.app"
+      - name: Create .dmg installer
+        run: |
+          VERSION="${{ inputs.version }}"
+          APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
+          DMG_PATH="dist/${APP_DISPLAY_NAME}-${VERSION}-macos-universal.dmg"
+          mkdir -p dist
 
-    - name: Create architecture tarballs and zips
-      run: |
-        VERSION="${{ steps.version.outputs.VERSION }}"
-        mkdir -p dist
-        for arch in aarch64 x86_64 universal; do
-          BIN="target/${arch}-apple-darwin/release/$APP_NAME"
+          VOLICON_ARGS=()
+          if [[ -f assets/images/logo.icns ]]; then
+            VOLICON_ARGS=(--volicon assets/images/logo.icns)
+          fi
 
-          # .tar.gz
-          tar -czf "dist/${APP_NAME}-${VERSION}-macos-${arch}.tar.gz" \
-            -C "$(dirname "$BIN")" "$APP_NAME"
+          create-dmg \
+            --volname "$APP_DISPLAY_NAME" \
+            "${VOLICON_ARGS[@]}" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "${APP_DISPLAY_NAME}.app" 175 190 \
+            --app-drop-link 425 190 \
+            --no-internet-enable \
+            "$DMG_PATH" \
+            "$APP_BUNDLE" || true
 
-          # .tar
-          tar -cf "dist/${APP_NAME}-${VERSION}-macos-${arch}.tar" \
-            -C "$(dirname "$BIN")" "$APP_NAME"
+          hdiutil detach "/Volumes/$APP_DISPLAY_NAME" 2>/dev/null || true
 
-          # .zip
-          zip -j "dist/${APP_NAME}-${VERSION}-macos-${arch}.zip" "$BIN"
-        done
+      - name: Create .app zip
+        run: |
+          VERSION="${{ inputs.version }}"
+          APP_BUNDLE="target/aarch64-apple-darwin/release/bundle/osx/${APP_DISPLAY_NAME}.app"
+          mkdir -p dist
+          cd "$(dirname "$APP_BUNDLE")"
+          zip -r "$GITHUB_WORKSPACE/dist/${APP_DISPLAY_NAME}-${VERSION}-macos-universal.app.zip" "${APP_DISPLAY_NAME}.app"
 
-    - name: Generate checksums
-      run: |
-        cd dist
-        shasum -a 256 * > SHA256SUMS.txt
+      - name: Create architecture tarballs and zips
+        run: |
+          VERSION="${{ inputs.version }}"
+          mkdir -p dist
+          for arch in aarch64 x86_64 universal; do
+            BIN="target/${arch}-apple-darwin/release/$APP_NAME"
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        generate_release_notes: true
-        files: |
-          dist/*.dmg
-          dist/*.tar.gz
-          dist/*.tar
-          dist/*.zip
-          dist/SHA256SUMS.txt
+            tar -czf "dist/${APP_NAME}-${VERSION}-macos-${arch}.tar.gz" \
+              -C "$(dirname "$BIN")" "$APP_NAME"
+
+            tar -cf "dist/${APP_NAME}-${VERSION}-macos-${arch}.tar" \
+              -C "$(dirname "$BIN")" "$APP_NAME"
+
+            zip -j "dist/${APP_NAME}-${VERSION}-macos-${arch}.zip" "$BIN"
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          shasum -a 256 * > SHA256SUMS.txt
+
+      - name: Commit release metadata to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml CHANGELOG.md
+          git commit -m "chore: release v${{ inputs.version }}"
+          git push origin HEAD:main
+
+      - name: Create and push release tag
+        run: |
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/*.dmg
+            dist/*.tar.gz
+            dist/*.tar
+            dist/*.zip
+            dist/SHA256SUMS.txt
