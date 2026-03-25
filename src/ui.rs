@@ -1717,7 +1717,7 @@ fn view_main<'a>(
     let recording_meta_text = recording_duration.map(|duration| {
         let mut label = format_duration(duration);
         if let Some(size) = state.last_recording_file_size_bytes {
-            label = format!("{} • {}", format_bytes(size), label);
+            label = format!("{}     {}", format_bytes(size), label);
         }
         text(label).size(12).color(current_palette().muted)
     });
