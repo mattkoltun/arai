@@ -40,8 +40,16 @@ jobs:
               );
             }
 
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
+          token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
           ref: main
 
@@ -161,8 +169,8 @@ jobs:
 
       - name: Commit release metadata to main
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "mkoltun-bot"
+          git config user.email "mkoltun-bot@users.noreply.github.com"
           git add Cargo.toml CHANGELOG.md
           git commit -m "chore: release v${{ inputs.version }}"
           git push origin HEAD:main
@@ -183,3 +191,5 @@ jobs:
             dist/*.tar
             dist/*.zip
             dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
