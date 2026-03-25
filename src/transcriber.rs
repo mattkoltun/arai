@@ -1,6 +1,6 @@
 use crate::channels::{AppEventSender, AudioReceiver};
 use crate::config::TranscriberConfig;
-use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk};
+use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk, RecordingData};
 use log::{debug, error, info, trace};
 use std::fmt;
 use std::sync::Arc;
@@ -46,7 +46,7 @@ pub struct Transcriber {
 }
 
 enum TranscriberCommand {
-    ReconcileFile(String),
+    ReconcileRecording(RecordingData),
     Stop,
 }
 
@@ -98,7 +98,7 @@ impl Transcriber {
     }
 
     /// Tells the worker to drain remaining chunks without running inference.
-    /// The full audio is already saved to a WAV file for reconciliation.
+    /// The full audio is retained in memory for reconciliation.
     pub fn drain_without_inference(&self) {
         self.drain_flag.store(true, Ordering::SeqCst);
     }
@@ -117,10 +117,10 @@ impl Transcriber {
         }
     }
 
-    /// Queues a full-file reconciliation request on the transcriber worker.
-    pub fn reconcile_file(&self, path: String) {
+    /// Queues an in-memory recording reconciliation request on the transcriber worker.
+    pub fn reconcile_recording(&self, recording: RecordingData) {
         if let Some(tx) = &self.command_tx {
-            let _ = tx.send(TranscriberCommand::ReconcileFile(path));
+            let _ = tx.send(TranscriberCommand::ReconcileRecording(recording));
         }
     }
 }
@@ -195,7 +195,7 @@ fn worker(
         let is_final = chunk.is_final;
 
         // When drain flag is set, skip inference on buffered chunks.
-        // The full audio is saved to WAV for reconciliation.
+        // The full audio is retained for reconciliation.
         if drain_flag.load(Ordering::Relaxed) {
             if is_final {
                 info!("Streaming transcription drained (fast path)");
@@ -279,8 +279,8 @@ fn process_pending_commands(
         };
 
         match command {
-            TranscriberCommand::ReconcileFile(path) => {
-                let result = transcribe_wav_file_with_context(ctx, config, &path);
+            TranscriberCommand::ReconcileRecording(recording) => {
+                let result = transcribe_recording_with_context(ctx, config, &recording);
                 match result {
                     Ok(text) => {
                         let _ = app_event_tx.send(AppEvent {
@@ -295,10 +295,6 @@ fn process_pending_commands(
                             kind: AppEventKind::ReconciliationComplete(String::new()),
                         });
                     }
-                }
-
-                if let Err(err) = std::fs::remove_file(&path) {
-                    error!("Failed to remove recording {path}: {err}");
                 }
             }
             TranscriberCommand::Stop => return Err(WorkerExit::Stop),
@@ -322,13 +318,19 @@ fn trim_streaming_buffer(buffer: &mut Vec<f32>, overlap_samples: usize, is_final
     buffer.drain(0..start);
 }
 
-/// Transcribes a WAV file using an already-loaded Whisper context.
-fn transcribe_wav_file_with_context(
+/// Transcribes a finalized recording using an already-loaded Whisper context.
+fn transcribe_recording_with_context(
     ctx: &WhisperContext,
     config: &TranscriberConfig,
-    wav_path: &str,
+    recording: &RecordingData,
 ) -> Result<String, String> {
-    let samples = read_wav_to_f32(wav_path).map_err(|e| format!("Failed to read WAV: {e}"))?;
+    let chunk = AudioChunk {
+        sample_rate: recording.sample_rate,
+        channels: recording.channels,
+        samples: recording.samples.clone(),
+        is_final: true,
+    };
+    let samples = resample_to_mono_16k(&chunk);
     if samples.is_empty() {
         return Ok(String::new());
     }
@@ -345,73 +347,6 @@ fn transcribe_wav_file_with_context(
     );
     transcribe_audio_full(ctx, &samples, config.no_timestamps)
         .map_err(|e| format!("Transcription error: {e}"))
-}
-
-/// Reads a 16-bit PCM WAV file and returns mono f32 samples at 16kHz.
-fn read_wav_to_f32(path: &str) -> Result<Vec<f32>, String> {
-    let data = std::fs::read(path).map_err(|e| e.to_string())?;
-    if data.len() < 12 {
-        return Err("WAV file too short".to_string());
-    }
-    if &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
-        return Err("Not a valid WAV file".to_string());
-    }
-
-    let mut channels: Option<u16> = None;
-    let mut sample_rate: Option<u32> = None;
-    let mut bits_per_sample: Option<u16> = None;
-    let mut pcm_data: Option<&[u8]> = None;
-
-    // Walk RIFF sub-chunks starting after the WAVE identifier.
-    let mut offset = 12;
-    while offset + 8 <= data.len() {
-        let chunk_id = &data[offset..offset + 4];
-        let chunk_size = u32::from_le_bytes([
-            data[offset + 4],
-            data[offset + 5],
-            data[offset + 6],
-            data[offset + 7],
-        ]) as usize;
-        let chunk_start = offset + 8;
-        let chunk_end = (chunk_start + chunk_size).min(data.len());
-
-        if chunk_id == b"fmt " && chunk_end >= chunk_start + 16 {
-            let d = &data[chunk_start..chunk_end];
-            channels = Some(u16::from_le_bytes([d[2], d[3]]));
-            sample_rate = Some(u32::from_le_bytes([d[4], d[5], d[6], d[7]]));
-            bits_per_sample = Some(u16::from_le_bytes([d[14], d[15]]));
-        } else if chunk_id == b"data" {
-            pcm_data = Some(&data[chunk_start..chunk_end]);
-        }
-
-        offset = chunk_start + chunk_size;
-        // WAV chunks are word-aligned
-        if !chunk_size.is_multiple_of(2) {
-            offset += 1;
-        }
-    }
-
-    let channels = channels.ok_or("No fmt chunk found")?;
-    let sample_rate = sample_rate.ok_or("No fmt chunk found")?;
-    let bps = bits_per_sample.ok_or("No fmt chunk found")?;
-    let pcm_data = pcm_data.ok_or("No data chunk found")?;
-
-    if bps != 16 {
-        return Err(format!("Unsupported bits per sample: {bps}"));
-    }
-
-    let samples_i16: Vec<i16> = pcm_data
-        .chunks_exact(2)
-        .map(|b| i16::from_le_bytes([b[0], b[1]]))
-        .collect();
-
-    let chunk = AudioChunk {
-        sample_rate,
-        channels,
-        samples: samples_i16,
-        is_final: true,
-    };
-    Ok(resample_to_mono_16k(&chunk))
 }
 
 /// Runs Whisper inference on a full recording. Unlike [`transcribe_audio`],
