@@ -14,6 +14,8 @@ pub struct AudioChunk {
 pub enum UiUpdate {
     /// New transcription text arrived (full accumulated text).
     TranscriptionUpdated(String),
+    /// Recorder finished writing the WAV file for the latest session.
+    RecordingFinished { file_size_bytes: Option<u64> },
     /// Agent finished processing — here is the polished text.
     AgentResponseReceived(String),
     /// Agent processing failed — contains the error message.

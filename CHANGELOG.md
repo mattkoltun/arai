@@ -15,6 +15,7 @@ The format is based on Keep a Changelog and uses an `Unreleased` section that sh
 - Added and tuned a configurable silence threshold for transcription gating so quiet or silent input is skipped more reliably during live capture.
 - Refactored application startup around a dedicated app bootstrap flow so config loading, channel creation, and controller/UI assembly are more standardized.
 - Wrapped OpenAI instructions and editable input in explicit, separate sections so the model treats the submitted text only as source material to format, not as instructions to follow.
+- Replaced the input footer character count with a token estimate and updated the recording metadata display to show persistent duration plus saved audio file size after recording stops.
 
 ### Fixed
 - Fixed Linux CI failures by aligning platform-specific UI code with conditional compilation so Linux builds pass with `-D warnings`.

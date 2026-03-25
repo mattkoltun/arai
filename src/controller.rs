@@ -223,6 +223,13 @@ impl Controller {
                 (AppEventSource::Recorder, AppEventKind::Stopped(wav_path)) => {
                     info!("Recorder stopped, joining handle");
                     self.recorder.join_handle();
+                    let file_size_bytes = wav_path
+                        .as_deref()
+                        .and_then(|path| std::fs::metadata(path).ok())
+                        .map(|meta| meta.len());
+                    let _ = self
+                        .ui_update_tx
+                        .send(UiUpdate::RecordingFinished { file_size_bytes });
                     wav_path_ready = wav_path;
                     if streaming_drained && let Some(path) = wav_path_ready.take() {
                         reconciling = true;
