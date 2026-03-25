@@ -95,9 +95,9 @@ Config file at `~/.config/arai/config.yaml`. API key is stored in the OS keyring
 - Use clear, present-tense commit messages; Conventional Commits are preferred (`feat: add config loader`, `fix: handle empty args`).
 - Keep commits focused and minimal; include formatting/lint changes with related code changes when possible.
 - Never commit directly on the `main` branch unless the user explicitly instructs you to do so.
-- When changing source code under `src/` or other shipped code paths, update `CHANGELOG.md` in the same task before finishing.
+- Update `CHANGELOG.md` in the same task only when shipped source code changes or dependency changes are made.
 - Add changelog notes under `## [Unreleased]` using concise entries grouped under headings such as `Added`, `Changed`, `Fixed`, `Removed`, `Security`, or `Deprecated`.
-- Do not add changelog entries for docs-only, comment-only, test-only, CI-only, or tooling-only changes unless they materially affect shipped behavior.
+- Do not add changelog entries for docs-only, comment-only, test-only, CI-only, release-process, or tooling-only changes.
 - PRs should describe what changed, why, and how to verify (commands run, screenshots if user-facing behavior changes).
 - Link issues when available and call out breaking changes explicitly.
 

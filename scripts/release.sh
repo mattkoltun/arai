@@ -52,10 +52,9 @@ build_binary() {
     cargo build --release --target "$target" --manifest-path "$PROJECT_ROOT/Cargo.toml"
 }
 
-split_target_specs() {
+target_specs_lines() {
     local specs="$1"
-    local -n out_ref="$2"
-    IFS=',' read -r -a out_ref <<< "$specs"
+    printf '%s\n' "$specs" | tr ',' '\n'
 }
 
 target_path() {
@@ -79,14 +78,6 @@ archive_binary() {
 # ── macOS ────────────────────────────────────────────────────────────
 
 release_macos() {
-    local targets=()
-    split_target_specs "$MACOS_TARGETS" targets
-
-    if [[ ${#targets[@]} -lt 2 ]]; then
-        echo "Error: MACOS_TARGETS must contain at least two target:label entries."
-        exit 1
-    fi
-
     echo ""
     echo "── macOS ──────────────────────────────────"
     check_command "cargo-bundle" "Install with: cargo install cargo-bundle"
@@ -96,8 +87,10 @@ release_macos() {
     local universal_target="universal-apple-darwin"
     local universal_bin="$PROJECT_ROOT/target/$universal_target/release/$APP_NAME"
     local lipo_inputs=()
+    local build_count=0
 
-    for spec in "${targets[@]}"; do
+    while IFS= read -r spec; do
+        [[ -z "$spec" ]] && continue
         IFS=':' read -r target label <<< "$spec"
         if [[ -z "$target" || -z "$label" ]]; then
             echo "Error: Invalid macOS target spec '$spec'. Expected target:label."
@@ -108,7 +101,13 @@ release_macos() {
         if [[ -z "$bundle_target" ]]; then
             bundle_target="$target"
         fi
-    done
+        build_count=$((build_count + 1))
+    done < <(target_specs_lines "$MACOS_TARGETS")
+
+    if [[ $build_count -lt 2 ]]; then
+        echo "Error: MACOS_TARGETS must contain at least two target:label entries."
+        exit 1
+    fi
 
     echo ""
     echo "==> Creating universal binary"
@@ -167,28 +166,23 @@ release_macos() {
     )
     echo "    -> $app_zip"
 
-    for spec in "${targets[@]}"; do
+    while IFS= read -r spec; do
+        [[ -z "$spec" ]] && continue
         IFS=':' read -r target label <<< "$spec"
         archive_binary "$(target_path "$target")" "$DIST_DIR/${APP_NAME}-${VERSION}-macos-${label}"
-    done
+    done < <(target_specs_lines "$MACOS_TARGETS")
     archive_binary "$universal_bin" "$DIST_DIR/${APP_NAME}-${VERSION}-macos-universal"
 }
 
 # ── Linux ────────────────────────────────────────────────────────────
 
 release_linux() {
-    local targets=()
-    split_target_specs "$LINUX_TARGETS" targets
-
-    if [[ ${#targets[@]} -eq 0 ]]; then
-        echo "Error: LINUX_TARGETS must contain at least one target:label entry."
-        exit 1
-    fi
-
     echo ""
     echo "── Linux ──────────────────────────────────"
+    local build_count=0
 
-    for spec in "${targets[@]}"; do
+    while IFS= read -r spec; do
+        [[ -z "$spec" ]] && continue
         IFS=':' read -r target label <<< "$spec"
         if [[ -z "$target" || -z "$label" ]]; then
             echo "Error: Invalid Linux target spec '$spec'. Expected target:label."
@@ -196,7 +190,13 @@ release_linux() {
         fi
         build_binary "$target" "Linux ${label}"
         archive_binary "$(target_path "$target")" "$DIST_DIR/${APP_NAME}-${VERSION}-linux-${label}"
-    done
+        build_count=$((build_count + 1))
+    done < <(target_specs_lines "$LINUX_TARGETS")
+
+    if [[ $build_count -eq 0 ]]; then
+        echo "Error: LINUX_TARGETS must contain at least one target:label entry."
+        exit 1
+    fi
 }
 
 usage() {
