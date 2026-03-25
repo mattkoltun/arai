@@ -3,7 +3,7 @@ use crate::app_state::AppStateHandle;
 use crate::channels::{AppEventReceiver, AppEventSender, AudioChannels, UiUpdateSender};
 use crate::config::TranscriberConfig;
 use crate::history::History;
-use crate::messages::{AppEvent, AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
+use crate::messages::{AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
 use log::{debug, error, info};
@@ -130,29 +130,7 @@ impl Controller {
     fn start_reconciliation(&self, path: String) {
         info!("Starting reconciliation from {path}");
         let _ = self.ui_update_tx.send(UiUpdate::ReconciliationStarted);
-        let transcriber_config = self.app_state.transcriber_config();
-        let tx = self.app_event_tx.clone();
-        std::thread::spawn(move || {
-            let result = crate::transcriber::transcribe_wav_file(&transcriber_config, &path);
-            match result {
-                Ok(text) => {
-                    let _ = tx.send(AppEvent {
-                        source: AppEventSource::Transcriber,
-                        kind: AppEventKind::ReconciliationComplete(text),
-                    });
-                }
-                Err(e) => {
-                    error!("Reconciliation failed: {e}");
-                    let _ = tx.send(AppEvent {
-                        source: AppEventSource::Transcriber,
-                        kind: AppEventKind::ReconciliationComplete(String::new()),
-                    });
-                }
-            }
-            if let Err(e) = std::fs::remove_file(&path) {
-                log::warn!("Failed to remove recording {path}: {e}");
-            }
-        });
+        self.transcriber.reconcile_file(path);
     }
 
     /// Stops the current transcriber and starts a new one with updated config.

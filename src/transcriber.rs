@@ -5,7 +5,9 @@ use log::{debug, error, info, trace};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperError,
 };
@@ -35,11 +37,17 @@ pub struct Transcriber {
     app_event_tx: AppEventSender,
     config: TranscriberConfig,
     handle: Option<JoinHandle<()>>,
+    command_tx: Option<Sender<TranscriberCommand>>,
     stop_flag: Arc<AtomicBool>,
     /// When set, the worker drains buffered chunks without running Whisper
     /// inference. Used after recording stops so reconciliation can start
     /// sooner — the full audio is already saved to a WAV file.
     drain_flag: Arc<AtomicBool>,
+}
+
+enum TranscriberCommand {
+    ReconcileFile(String),
+    Stop,
 }
 
 impl Transcriber {
@@ -55,6 +63,7 @@ impl Transcriber {
             app_event_tx,
             config,
             handle: None,
+            command_tx: None,
             stop_flag: Arc::new(AtomicBool::new(false)),
             drain_flag: Arc::new(AtomicBool::new(false)),
         }
@@ -73,9 +82,18 @@ impl Transcriber {
         let config = self.config.clone();
         let stop_flag = Arc::clone(&self.stop_flag);
         let drain_flag = Arc::clone(&self.drain_flag);
+        let (command_tx, command_rx) = mpsc::channel();
         self.handle = Some(thread::spawn(move || {
-            worker(audio_rx, app_event_tx, config, stop_flag, drain_flag)
+            worker(
+                audio_rx,
+                command_rx,
+                app_event_tx,
+                config,
+                stop_flag,
+                drain_flag,
+            )
         }));
+        self.command_tx = Some(command_tx);
         Ok(())
     }
 
@@ -94,6 +112,16 @@ impl Transcriber {
     pub fn stop(&self) {
         self.drain_flag.store(true, Ordering::SeqCst);
         self.stop_flag.store(true, Ordering::SeqCst);
+        if let Some(tx) = &self.command_tx {
+            let _ = tx.send(TranscriberCommand::Stop);
+        }
+    }
+
+    /// Queues a full-file reconciliation request on the transcriber worker.
+    pub fn reconcile_file(&self, path: String) {
+        if let Some(tx) = &self.command_tx {
+            let _ = tx.send(TranscriberCommand::ReconcileFile(path));
+        }
     }
 }
 
@@ -120,6 +148,7 @@ fn context_params(config: &TranscriberConfig) -> WhisperContextParameters<'stati
 /// Transcription results are sent to the controller via `app_event_tx`.
 fn worker(
     audio_rx: AudioReceiver,
+    command_rx: mpsc::Receiver<TranscriberCommand>,
     app_event_tx: AppEventSender,
     config: TranscriberConfig,
     stop_flag: Arc<AtomicBool>,
@@ -141,7 +170,24 @@ fn worker(
     let mut buffer = Vec::new();
     let streaming_silence_threshold =
         effective_streaming_silence_threshold(config.silence_threshold);
-    while let Ok(chunk) = audio_rx.recv() {
+
+    loop {
+        if stop_flag.load(Ordering::SeqCst) {
+            debug!("Transcriber stop flag set, exiting");
+            break;
+        }
+
+        match process_pending_commands(&command_rx, &app_event_tx, &ctx, &config) {
+            Ok(()) => {}
+            Err(WorkerExit::Stop) | Err(WorkerExit::Disconnected) => break,
+        }
+
+        let chunk = match audio_rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(chunk) => chunk,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+
         if stop_flag.load(Ordering::SeqCst) {
             debug!("Transcriber stop flag set, exiting");
             break;
@@ -213,6 +259,53 @@ fn worker(
     }
 }
 
+enum WorkerExit {
+    Stop,
+    Disconnected,
+}
+
+/// Drains any queued commands before the worker goes back to streaming audio.
+fn process_pending_commands(
+    command_rx: &mpsc::Receiver<TranscriberCommand>,
+    app_event_tx: &AppEventSender,
+    ctx: &WhisperContext,
+    config: &TranscriberConfig,
+) -> Result<(), WorkerExit> {
+    loop {
+        let command = match command_rx.try_recv() {
+            Ok(command) => command,
+            Err(TryRecvError::Empty) => return Ok(()),
+            Err(TryRecvError::Disconnected) => return Err(WorkerExit::Disconnected),
+        };
+
+        match command {
+            TranscriberCommand::ReconcileFile(path) => {
+                let result = transcribe_wav_file_with_context(ctx, config, &path);
+                match result {
+                    Ok(text) => {
+                        let _ = app_event_tx.send(AppEvent {
+                            source: AppEventSource::Transcriber,
+                            kind: AppEventKind::ReconciliationComplete(text),
+                        });
+                    }
+                    Err(err) => {
+                        error!("Reconciliation failed: {err}");
+                        let _ = app_event_tx.send(AppEvent {
+                            source: AppEventSource::Transcriber,
+                            kind: AppEventKind::ReconciliationComplete(String::new()),
+                        });
+                    }
+                }
+
+                if let Err(err) = std::fs::remove_file(&path) {
+                    error!("Failed to remove recording {path}: {err}");
+                }
+            }
+            TranscriberCommand::Stop => return Err(WorkerExit::Stop),
+        }
+    }
+}
+
 /// Caps the live silence gate to avoid suppressing normal speech on quieter mics.
 fn effective_streaming_silence_threshold(configured: f32) -> f32 {
     configured.min(MAX_STREAMING_SILENCE_THRESHOLD)
@@ -229,11 +322,12 @@ fn trim_streaming_buffer(buffer: &mut Vec<f32>, overlap_samples: usize, is_final
     buffer.drain(0..start);
 }
 
-/// Transcribes an entire WAV file in one pass using Whisper. Reads the file,
-/// resamples to 16kHz mono, and runs full inference. This is used for
-/// reconciliation after a recording session to produce a clean transcript
-/// from the complete audio.
-pub fn transcribe_wav_file(config: &TranscriberConfig, wav_path: &str) -> Result<String, String> {
+/// Transcribes a WAV file using an already-loaded Whisper context.
+fn transcribe_wav_file_with_context(
+    ctx: &WhisperContext,
+    config: &TranscriberConfig,
+    wav_path: &str,
+) -> Result<String, String> {
     let samples = read_wav_to_f32(wav_path).map_err(|e| format!("Failed to read WAV: {e}"))?;
     if samples.is_empty() {
         return Ok(String::new());
@@ -249,9 +343,7 @@ pub fn transcribe_wav_file(config: &TranscriberConfig, wav_path: &str) -> Result
         samples.len() as f32 / TARGET_SAMPLE_RATE as f32,
         energy,
     );
-    let ctx = WhisperContext::new_with_params(&config.model_path, context_params(config))
-        .map_err(|e| format!("Failed to load model: {e}"))?;
-    transcribe_audio_full(&ctx, &samples, config.no_timestamps)
+    transcribe_audio_full(ctx, &samples, config.no_timestamps)
         .map_err(|e| format!("Transcription error: {e}"))
 }
 
