@@ -3,7 +3,7 @@ use crate::app_state::AppStateHandle;
 use crate::channels::{AppEventReceiver, AppEventSender, AudioChannels, UiUpdateSender};
 use crate::config::TranscriberConfig;
 use crate::history::History;
-use crate::messages::{AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
+use crate::messages::{AppEventKind, AppEventSource, ErrorInfo, RecordingData, UiUpdate};
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
 use log::{debug, error, info};
@@ -126,11 +126,14 @@ impl Controller {
         }
     }
 
-    /// Spawns a background thread to reconcile the full recording.
-    fn start_reconciliation(&self, path: String) {
-        info!("Starting reconciliation from {path}");
+    /// Queues a full-recording reconciliation request on the transcriber.
+    fn start_reconciliation(&self, recording: RecordingData) {
+        info!(
+            "Starting reconciliation from in-memory recording ({} samples)",
+            recording.samples.len()
+        );
         let _ = self.ui_update_tx.send(UiUpdate::ReconciliationStarted);
-        self.transcriber.reconcile_file(path);
+        self.transcriber.reconcile_recording(recording);
     }
 
     /// Stops the current transcriber and starts a new one with updated config.
@@ -184,7 +187,7 @@ impl Controller {
         // Both conditions must be true before reconciliation can start:
         // the streaming transcriber must finish its backlog AND the
         // recorder must finish writing the WAV file.
-        let mut wav_path_ready: Option<String> = None;
+        let mut recording_ready: Option<RecordingData> = None;
         let mut streaming_drained = false;
 
         // Send initial config snapshot so the UI has config before any changes.
@@ -198,20 +201,17 @@ impl Controller {
             };
 
             match (event.source, event.kind) {
-                (AppEventSource::Recorder, AppEventKind::Stopped(wav_path)) => {
+                (AppEventSource::Recorder, AppEventKind::Stopped(recording)) => {
                     info!("Recorder stopped, joining handle");
                     self.recorder.join_handle();
-                    let file_size_bytes = wav_path
-                        .as_deref()
-                        .and_then(|path| std::fs::metadata(path).ok())
-                        .map(|meta| meta.len());
+                    let file_size_bytes = recording.as_ref().map(|data| data.file_size_bytes);
                     let _ = self
                         .ui_update_tx
                         .send(UiUpdate::RecordingFinished { file_size_bytes });
-                    wav_path_ready = wav_path;
-                    if streaming_drained && let Some(path) = wav_path_ready.take() {
+                    recording_ready = recording;
+                    if streaming_drained && let Some(recording) = recording_ready.take() {
                         reconciling = true;
-                        self.start_reconciliation(path);
+                        self.start_reconciliation(recording);
                     }
                 }
                 (AppEventSource::Recorder, AppEventKind::Error(message)) => {
@@ -236,9 +236,9 @@ impl Controller {
                 (AppEventSource::Transcriber, AppEventKind::StreamingDrained) => {
                     info!("Controller received streaming drained signal");
                     streaming_drained = true;
-                    if let Some(path) = wav_path_ready.take() {
+                    if let Some(recording) = recording_ready.take() {
                         reconciling = true;
-                        self.start_reconciliation(path);
+                        self.start_reconciliation(recording);
                     }
                 }
                 (AppEventSource::Transcriber, AppEventKind::ReconciliationComplete(text)) => {
@@ -275,7 +275,7 @@ impl Controller {
                     pre_recording_text = text.clone();
                     accumulated_transcription = text;
                     streaming_drained = false;
-                    wav_path_ready = None;
+                    recording_ready = None;
                     self.start_listening();
                 }
                 (AppEventSource::Ui, AppEventKind::UiStopListening) => {

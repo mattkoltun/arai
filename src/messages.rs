@@ -9,12 +9,21 @@ pub struct AudioChunk {
     pub is_final: bool,
 }
 
+/// Finalized recording payload retained in memory for reconciliation.
+#[derive(Clone, Debug)]
+pub struct RecordingData {
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub samples: Vec<i16>,
+    pub file_size_bytes: u64,
+}
+
 /// Messages sent from the Controller to the UI via a dedicated channel.
 #[derive(Clone, Debug)]
 pub enum UiUpdate {
     /// New transcription text arrived (full accumulated text).
     TranscriptionUpdated(String),
-    /// Recorder finished writing the WAV file for the latest session.
+    /// Recorder finished finalizing the latest session.
     RecordingFinished { file_size_bytes: Option<u64> },
     /// Agent finished processing — here is the polished text.
     AgentResponseReceived(String),
@@ -87,8 +96,8 @@ pub enum AppEventSource {
 
 #[derive(Clone, Debug)]
 pub enum AppEventKind {
-    /// Recorder stopped; optionally carries the path to the saved WAV file.
-    Stopped(Option<String>),
+    /// Recorder stopped; optionally carries the in-memory audio for reconciliation.
+    Stopped(Option<RecordingData>),
     Error(String),
     Transcription(String),
     /// Streaming transcriber finished processing all buffered audio chunks.

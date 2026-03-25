@@ -1,16 +1,12 @@
 use crate::channels::{AppEventSender, AudioSender};
-use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk};
+use crate::messages::{AppEvent, AppEventKind, AppEventSource, AudioChunk, RecordingData};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
-use log::{debug, error, info, warn};
-use std::io::Write;
+use log::{debug, error, info};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-
-/// Directory under the user's cache folder where recordings are stored.
-const RECORDINGS_DIR: &str = ".cache/arai/recordings";
 
 #[derive(Debug)]
 pub enum RecorderError {
@@ -87,7 +83,7 @@ impl Recorder {
             let audio_tx_final = audio_tx.clone();
 
             // Accumulator channel: each callback sends its i16 samples here so
-            // we can write the full recording to a WAV file after stopping.
+            // we can reconcile the full recording directly from memory.
             let (accum_tx, accum_rx) = std::sync::mpsc::channel::<Vec<i16>>();
             let accumulated_rx = Some(accum_rx);
 
@@ -205,15 +201,18 @@ impl Recorder {
                 is_final: true,
             });
 
-            // Read back accumulated samples from the receiver and save to WAV.
-            // The audio_tx_accum sender was collecting samples in the callbacks;
-            // here we drain them from the dedicated accumulator channel.
-            let wav_path = if let Some(ref accum) = accumulated_rx {
+            // Read back accumulated samples from the receiver for reconciliation.
+            let recording = if let Some(ref accum) = accumulated_rx {
                 let all_samples: Vec<i16> = accum.try_iter().flatten().collect();
                 if all_samples.is_empty() {
                     None
                 } else {
-                    write_wav(&all_samples, sample_rate, channels)
+                    Some(RecordingData {
+                        sample_rate,
+                        channels,
+                        file_size_bytes: wav_size_bytes(&all_samples),
+                        samples: all_samples,
+                    })
                 }
             } else {
                 None
@@ -221,7 +220,7 @@ impl Recorder {
 
             let _ = app_event_tx.send(AppEvent {
                 source: AppEventSource::Recorder,
-                kind: AppEventKind::Stopped(wav_path.map(|p| p.to_string_lossy().into_owned())),
+                kind: AppEventKind::Stopped(recording),
             });
             info!("Recorder stopped");
         });
@@ -293,70 +292,7 @@ impl Recorder {
     }
 }
 
-/// Returns the recordings directory path (`~/.cache/arai/recordings/`).
-fn recordings_dir() -> Option<std::path::PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|h| std::path::PathBuf::from(h).join(RECORDINGS_DIR))
-}
-
-/// Writes accumulated i16 PCM samples to a WAV file and returns the path.
-/// Returns `None` if the directory cannot be created or the write fails.
-fn write_wav(samples: &[i16], sample_rate: u32, channels: u16) -> Option<std::path::PathBuf> {
-    let dir = recordings_dir()?;
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        warn!("Failed to create recordings dir: {e}");
-        return None;
-    }
-
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let path = dir.join(format!("{timestamp}.wav"));
-
-    match write_wav_file(&path, samples, sample_rate, channels) {
-        Ok(()) => {
-            info!("Recording saved to {}", path.display());
-            Some(path)
-        }
-        Err(e) => {
-            warn!("Failed to write WAV: {e}");
-            None
-        }
-    }
-}
-
-/// Writes a minimal WAV (PCM 16-bit) file. No external crate needed.
-fn write_wav_file(
-    path: &std::path::Path,
-    samples: &[i16],
-    sample_rate: u32,
-    channels: u16,
-) -> std::io::Result<()> {
-    let data_len = (samples.len() * 2) as u32;
-    let byte_rate = sample_rate * channels as u32 * 2;
-    let block_align = channels * 2;
-
-    let mut f = std::fs::File::create(path)?;
-    // RIFF header
-    f.write_all(b"RIFF")?;
-    f.write_all(&(36 + data_len).to_le_bytes())?;
-    f.write_all(b"WAVE")?;
-    // fmt chunk
-    f.write_all(b"fmt ")?;
-    f.write_all(&16u32.to_le_bytes())?; // chunk size
-    f.write_all(&1u16.to_le_bytes())?; // PCM format
-    f.write_all(&channels.to_le_bytes())?;
-    f.write_all(&sample_rate.to_le_bytes())?;
-    f.write_all(&byte_rate.to_le_bytes())?;
-    f.write_all(&block_align.to_le_bytes())?;
-    f.write_all(&16u16.to_le_bytes())?; // bits per sample
-    // data chunk
-    f.write_all(b"data")?;
-    f.write_all(&data_len.to_le_bytes())?;
-    for &s in samples {
-        f.write_all(&s.to_le_bytes())?;
-    }
-    f.flush()
+/// Returns the equivalent 16-bit PCM WAV size for a sample buffer.
+fn wav_size_bytes(samples: &[i16]) -> u64 {
+    44 + (samples.len() as u64 * 2)
 }
