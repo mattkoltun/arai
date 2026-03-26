@@ -14,6 +14,15 @@ Arai is a voice-first prompt and writing assistant built for power users who wan
 
 Download the latest release from the [Releases](https://github.com/mattkoltun/arai/releases) page. On macOS, drag `Arai.app` to your Applications folder.
 
+### From Homebrew
+
+```bash
+brew tap mattkoltun/apps
+brew install --cask arai
+```
+
+Note: Arai is currently not signed with an Apple Developer certificate. After installation, macOS may block it from opening. To allow it, go to `System Settings > Privacy & Security` and approve the app under the Security section.
+
 ### From Source
 
 Requires the [Rust toolchain](https://rustup.rs/) (stable) and the [CMAKE](https://cmake.org/download/)
