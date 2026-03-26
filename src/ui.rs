@@ -450,6 +450,39 @@ impl UiRuntime {
         });
     }
 
+    fn push_undo_snapshot(&mut self) {
+        if self.undo_stack.last() != Some(&self.input) {
+            self.undo_stack.push(self.input.clone());
+            if self.undo_stack.len() > UNDO_LIMIT {
+                self.undo_stack.remove(0);
+            }
+        }
+        self.redo_stack.clear();
+    }
+
+    fn replace_editor_text(&mut self, text: String) {
+        if self.input == text {
+            return;
+        }
+        self.push_undo_snapshot();
+        self.input = text.clone();
+        self.editor = text_editor::Content::with_text(&text);
+    }
+
+    fn append_editor_text(&mut self, delta: &str) {
+        if delta.is_empty() {
+            return;
+        }
+        self.push_undo_snapshot();
+        self.editor
+            .perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+        for ch in delta.chars() {
+            self.editor
+                .perform(text_editor::Action::Edit(text_editor::Edit::Insert(ch)));
+        }
+        self.input.push_str(delta);
+    }
+
     fn toggle_listen(&mut self) {
         if self.mode == AppMode::Processing || self.mode == AppMode::Reconciling {
             return;
@@ -542,23 +575,11 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                             &text[state.input.len()..]
                         } else {
                             // Full text diverged (e.g. after user edit) — replace.
-                            state.editor = text_editor::Content::with_text(&text);
-                            state.input = text;
+                            state.replace_editor_text(text);
                             state.status_line = "Listening...".to_string();
                             return Task::none();
                         };
-                        if !delta.is_empty() {
-                            // Move cursor to end, then insert the delta.
-                            state.editor.perform(text_editor::Action::Move(
-                                text_editor::Motion::DocumentEnd,
-                            ));
-                            for ch in delta.chars() {
-                                state.editor.perform(text_editor::Action::Edit(
-                                    text_editor::Edit::Insert(ch),
-                                ));
-                            }
-                        }
-                        state.input = text;
+                        state.append_editor_text(delta);
                         state.status_line = "Listening...".to_string();
                     }
                 }
@@ -567,9 +588,8 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 }
                 UiUpdate::AgentResponseReceived(text) => {
                     state.processed_text = Some(text.clone());
-                    state.input = text;
                     state.mode = AppMode::Idle;
-                    state.editor = text_editor::Content::with_text(&state.input);
+                    state.replace_editor_text(text);
                     state.status_line = "Ready".to_string();
                 }
                 UiUpdate::ProcessingFailed(message) => {
@@ -586,8 +606,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 }
                 UiUpdate::ReconciliationComplete(text) => {
                     if !text.is_empty() {
-                        state.input = text;
-                        state.editor = text_editor::Content::with_text(&state.input);
+                        state.replace_editor_text(text);
                     }
                     state.mode = AppMode::Idle;
                     state.status_line = "Ready".to_string();
@@ -631,11 +650,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         Message::EditorAction(action) => {
             let is_edit = action.is_edit();
             if is_edit {
-                state.undo_stack.push(state.input.clone());
-                if state.undo_stack.len() > UNDO_LIMIT {
-                    state.undo_stack.remove(0);
-                }
-                state.redo_stack.clear();
+                state.push_undo_snapshot();
             }
             state.editor.perform(action);
             if state.mode == AppMode::Idle {
