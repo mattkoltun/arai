@@ -1,7 +1,7 @@
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 
-use crate::agent::AgentRequest;
+use crate::llm::LlmRequest;
 use crate::messages::{AppEvent, AudioChunk, UiUpdate};
 
 pub type AudioSender = Sender<AudioChunk>;
@@ -13,7 +13,7 @@ pub type AppEventReceiver = Receiver<AppEvent>;
 pub type UiUpdateSender = Sender<UiUpdate>;
 pub type UiUpdateReceiver = Receiver<UiUpdate>;
 
-pub type AgentSender = Sender<AgentRequest>;
+pub type LlmSender = Sender<LlmRequest>;
 
 /// Groups the application-wide event and UI update channels used at startup.
 pub struct AppChannels {

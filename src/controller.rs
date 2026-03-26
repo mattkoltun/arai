@@ -1,9 +1,10 @@
-use crate::agent::Agent;
 use crate::app_state::AppStateHandle;
 use crate::channels::{AppEventReceiver, AppEventSender, AudioChannels, UiUpdateSender};
 use crate::config::TranscriberConfig;
 use crate::history::History;
+use crate::llm::LlmWorker;
 use crate::messages::{AppEventKind, AppEventSource, ErrorInfo, RecordingData, UiUpdate};
+use crate::openai_connector::OpenAiConnector;
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
 use log::{debug, error, info};
@@ -44,7 +45,7 @@ pub struct Controller {
     transcriber: Transcriber,
     app_event_tx: AppEventSender,
     app_event_rx: AppEventReceiver,
-    agent: Agent,
+    llm_worker: LlmWorker,
     app_state: AppStateHandle,
     ui_update_tx: UiUpdateSender,
     shutting_down: Arc<AtomicBool>,
@@ -60,7 +61,7 @@ impl Controller {
         transcriber: Transcriber,
         app_event_tx: AppEventSender,
         app_event_rx: AppEventReceiver,
-        agent: Agent,
+        llm_worker: LlmWorker,
         app_state: AppStateHandle,
         ui_update_tx: UiUpdateSender,
         shutdown_flag: Arc<AtomicBool>,
@@ -70,7 +71,7 @@ impl Controller {
             transcriber,
             app_event_tx,
             app_event_rx,
-            agent,
+            llm_worker,
             app_state,
             ui_update_tx,
             shutting_down: shutdown_flag,
@@ -94,17 +95,16 @@ impl Controller {
 
     fn process_text(&self, text: String) {
         debug!("Controller processing text");
-        let _ = self
-            .ui_update_tx
-            .send(UiUpdate::AgentResponseReceived(text));
+        let _ = self.ui_update_tx.send(UiUpdate::LlmResponseReceived(text));
     }
 
     fn submit_text(&self, instruction: String, text: String) {
         debug!(
-            "Controller submitting text with instruction: {}",
+            "Controller submitting text to LLM with instruction: {}",
             &instruction[..instruction.len().min(80)]
         );
-        self.agent.submit(instruction, text);
+        self.llm_worker
+            .submit_text(self.app_state.llm_model(), instruction, text);
     }
 
     /// Appends a transcription chunk to the accumulated text, deduplicating
@@ -153,14 +153,21 @@ impl Controller {
         }
     }
 
-    /// Drops the current Agent and creates a new one with the given API key.
-    fn restart_agent(&mut self, api_key: String) {
-        info!("Restarting agent with new API key");
-        let old = std::mem::replace(
-            &mut self.agent,
-            Agent::new(self.app_event_tx.clone(), api_key),
-        );
-        drop(old);
+    /// Drops the current LLM worker and creates a new one with the given API key.
+    fn restart_llm_worker(&mut self, api_key: String) {
+        info!("Restarting LLM worker with new API key");
+        match OpenAiConnector::new(api_key) {
+            Ok(connector) => {
+                let old = std::mem::replace(
+                    &mut self.llm_worker,
+                    LlmWorker::new(self.app_event_tx.clone(), Box::new(connector)),
+                );
+                drop(old);
+            }
+            Err(err) => {
+                error!("Failed to rebuild OpenAI connector: {err}");
+            }
+        }
     }
 
     /// Sends a `ConfigSnapshot` to the UI so it has the current config state.
@@ -169,6 +176,7 @@ impl Controller {
         let _ = self.ui_update_tx.send(UiUpdate::ConfigSnapshot {
             agent_prompts: snapshot.agent_prompts,
             default_prompt: snapshot.default_prompt,
+            llm_model: snapshot.llm_model,
             transcriber: snapshot.transcriber,
             selected_input_device: snapshot.input_device,
             global_hotkey: snapshot.global_hotkey,
@@ -262,14 +270,26 @@ impl Controller {
                         accumulated_transcription.clone(),
                     ));
                 }
-                (AppEventSource::Agent, AppEventKind::Error(message)) => {
-                    error!("Agent event: {message}");
-                    let info = build_error_info("Agent", &message);
+                (AppEventSource::Llm, AppEventKind::Error(message)) => {
+                    error!("LLM event: {message}");
+                    let info = build_error_info("LLM", &message);
                     let _ = self.ui_update_tx.send(UiUpdate::ErrorOccurred(info));
                     let _ = self.ui_update_tx.send(UiUpdate::ProcessingFailed(message));
                 }
-                (AppEventSource::Agent, AppEventKind::AgentResponse(text)) => {
+                (AppEventSource::Llm, AppEventKind::LlmResponse(text)) => {
                     self.process_text(text);
+                }
+                (AppEventSource::Llm, AppEventKind::LlmModelsAvailable(models)) => {
+                    info!("LLM returned {} available models", models.len());
+                    let _ = self.ui_update_tx.send(UiUpdate::LlmModelsLoaded(models));
+                }
+                (AppEventSource::Llm, AppEventKind::LlmModelsLoadFailed(message)) => {
+                    error!("LLM model listing failed: {message}");
+                    let info = build_error_info("LLM", &message);
+                    let _ = self.ui_update_tx.send(UiUpdate::ErrorOccurred(info));
+                    let _ = self
+                        .ui_update_tx
+                        .send(UiUpdate::LlmModelsLoadFailed(message));
                 }
                 (AppEventSource::Ui, AppEventKind::UiStartListening(text)) => {
                     pre_recording_text = text.clone();
@@ -284,6 +304,9 @@ impl Controller {
                 (AppEventSource::Ui, AppEventKind::UiSubmitText { text, instruction }) => {
                     self.submit_text(instruction, text);
                 }
+                (AppEventSource::Ui, AppEventKind::UiRequestLlmModels) => {
+                    self.llm_worker.list_models();
+                }
                 (AppEventSource::Ui, AppEventKind::UiShutdown) => {
                     self.shutting_down.store(true, Ordering::SeqCst);
                 }
@@ -294,7 +317,7 @@ impl Controller {
                         default_prompt,
                     },
                 ) => {
-                    info!("Controller updating agent prompts");
+                    info!("Controller updating prompt instructions");
                     self.app_state.update_prompts(prompts, default_prompt);
                     self.send_config_snapshot();
                 }
@@ -328,13 +351,18 @@ impl Controller {
                     self.app_state.update_theme_mode(mode);
                     self.send_config_snapshot();
                 }
+                (AppEventSource::Ui, AppEventKind::UiUpdateLlmModel(model)) => {
+                    info!("Controller updating LLM model: {model}");
+                    self.app_state.update_llm_model(model);
+                    self.send_config_snapshot();
+                }
                 (AppEventSource::Ui, AppEventKind::UiUpdateApiKey(key)) => {
                     info!("Controller updating API key");
                     if let Err(e) = crate::keyring_store::set_api_key(&key) {
                         error!("Failed to save API key to keyring: {e}");
                     }
                     self.app_state.update_api_key(key.clone());
-                    self.restart_agent(key);
+                    self.restart_llm_worker(key);
                     self.send_config_snapshot();
                 }
                 (AppEventSource::Ui, AppEventKind::UiCopied { text, prompt }) => {
@@ -488,9 +516,9 @@ mod tests {
 
     #[test]
     fn build_error_info_splits_on_colon() {
-        let info = super::build_error_info("Agent", "Agent request failed: connection timeout");
-        assert_eq!(info.source, "Agent");
-        assert_eq!(info.title, "Agent request failed");
+        let info = super::build_error_info("LLM", "LLM request failed: connection timeout");
+        assert_eq!(info.source, "LLM");
+        assert_eq!(info.title, "LLM request failed");
         assert_eq!(info.detail, "connection timeout");
         assert!(!info.timestamp.is_empty());
     }

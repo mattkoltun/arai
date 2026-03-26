@@ -29,6 +29,7 @@ const DEFAULT_WINDOW_SECONDS: f32 = 3.0;
 const DEFAULT_OVERLAP_SECONDS: f32 = 0.25;
 const DEFAULT_SILENCE_THRESHOLD: f32 = 0.003;
 const DEFAULT_GLOBAL_HOTKEY: &str = "Alt+Space";
+const DEFAULT_LLM_MODEL: &str = "gpt-4o-mini";
 
 /// Controls the application color scheme.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
@@ -103,6 +104,8 @@ pub struct Config {
     pub input_device: Option<String>,
     #[serde(default)]
     pub theme_mode: ThemeMode,
+    #[serde(default = "default_llm_model")]
+    pub llm_model: String,
 }
 
 fn default_log_level() -> String {
@@ -124,6 +127,10 @@ fn default_global_hotkey() -> String {
     DEFAULT_GLOBAL_HOTKEY.to_string()
 }
 
+fn default_llm_model() -> String {
+    DEFAULT_LLM_MODEL.to_string()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -136,6 +143,7 @@ impl Default for Config {
             global_hotkey: default_global_hotkey(),
             input_device: None,
             theme_mode: ThemeMode::default(),
+            llm_model: default_llm_model(),
         }
     }
 }
@@ -173,6 +181,10 @@ impl Config {
             .is_some_and(|s| s.trim().is_empty())
         {
             config.input_device = None;
+        }
+
+        if config.llm_model.trim().is_empty() {
+            config.llm_model = default_llm_model();
         }
 
         // Save to remove the plain-text key from disk.
@@ -338,6 +350,7 @@ mod tests {
             global_hotkey: "Alt+Space".to_string(),
             input_device: None,
             theme_mode: ThemeMode::default(),
+            llm_model: default_llm_model(),
         }
     }
 

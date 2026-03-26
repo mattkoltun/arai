@@ -24,10 +24,12 @@ pub enum UiUpdate {
     /// New transcription text arrived (full accumulated text).
     TranscriptionUpdated(String),
     /// Recorder finished finalizing the latest session.
-    RecordingFinished { file_size_bytes: Option<u64> },
-    /// Agent finished processing — here is the polished text.
-    AgentResponseReceived(String),
-    /// Agent processing failed — contains the error message.
+    RecordingFinished {
+        file_size_bytes: Option<u64>,
+    },
+    /// LLM processing finished — here is the polished text.
+    LlmResponseReceived(String),
+    /// LLM processing failed — contains the error message.
     ProcessingFailed(String),
     /// Recording stopped, reconciliation pass is starting.
     ReconciliationStarted,
@@ -37,6 +39,7 @@ pub enum UiUpdate {
     ConfigSnapshot {
         agent_prompts: Vec<AgentPrompt>,
         default_prompt: usize,
+        llm_model: String,
         transcriber: TranscriberConfig,
         selected_input_device: Option<String>,
         global_hotkey: String,
@@ -44,6 +47,8 @@ pub enum UiUpdate {
         api_key_status: ApiKeyStatus,
         theme_mode: ThemeMode,
     },
+    LlmModelsLoaded(Vec<String>),
+    LlmModelsLoadFailed(String),
     /// Model download progress update for the wizard.
     ModelDownloadProgress(u64, u64),
     /// Model download completed — carries the saved model path.
@@ -72,7 +77,7 @@ pub enum ApiKeyStatus {
 /// Structured error information for display in the UI.
 #[derive(Clone, Debug)]
 pub struct ErrorInfo {
-    /// Which component produced the error ("Recorder", "Transcriber", "Agent").
+    /// Which component produced the error ("Recorder", "Transcriber", "LLM").
     #[allow(dead_code)]
     pub source: String,
     /// Short summary extracted from before the first ": " in the error message.
@@ -90,7 +95,7 @@ pub struct ErrorInfo {
 pub enum AppEventSource {
     Recorder,
     Transcriber,
-    Agent,
+    Llm,
     Ui,
 }
 
@@ -106,13 +111,17 @@ pub enum AppEventKind {
     ReconciliationComplete(String),
     UiStartListening(String),
     UiStopListening,
-    /// Submit text for processing with the given agent instruction.
+    /// Submit text for processing with the given instruction.
     UiSubmitText {
         text: String,
         instruction: String,
     },
     UiShutdown,
-    AgentResponse(String),
+    UiRequestLlmModels,
+    LlmResponse(String),
+    #[allow(dead_code)]
+    LlmModelsAvailable(Vec<String>),
+    LlmModelsLoadFailed(String),
     UiUpdatePrompts {
         prompts: Vec<AgentPrompt>,
         default_prompt: usize,
@@ -121,6 +130,7 @@ pub enum AppEventKind {
     UiUpdateInputDevice(Option<String>),
     UiUpdateGlobalHotkey(String),
     UiUpdateThemeMode(ThemeMode),
+    UiUpdateLlmModel(String),
     /// Update the OpenAI API key (UI → Controller).
     #[allow(dead_code)]
     UiUpdateApiKey(String),
