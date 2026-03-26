@@ -6,10 +6,11 @@ The format is based on Keep a Changelog and uses an `Unreleased` section that sh
 
 ## [Unreleased]
 
+### Changed
+- Simplified app icon assets to use `logo.png` for the runtime window icon and `logo.icns` for macOS bundling, removing redundant icon source files.
+
 ### Fixed
 - Fixed editor undo/redo history so transcription, reconciliation, and agent-response updates use the same text mutation path as manual edits.
-
-## [0.18.0] - 2026-03-25
 
 ## [0.18.0] - 2026-03-25
 
