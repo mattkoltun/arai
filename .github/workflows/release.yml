@@ -46,6 +46,8 @@ jobs:
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: mattkoltun
+          repositories: arai,homebrew-apps
 
       - uses: actions/checkout@v4
         with:
@@ -193,3 +195,24 @@ jobs:
             dist/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Notify homebrew tap
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/mattkoltun/homebrew-apps/dispatches \
+            -d @- <<EOF
+          {
+            "event_type": "arai_release_published",
+            "client_payload": {
+              "release_tag": "v${{ inputs.version }}",
+              "version": "${{ inputs.version }}"
+            }
+          }
+          EOF
