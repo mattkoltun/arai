@@ -174,6 +174,10 @@ enum AppPhase {
 const MAX_PROMPTS: usize = 10;
 
 struct SetupFields {
+    llm_model: String,
+    llm_models: Vec<String>,
+    llm_models_loading: bool,
+    llm_models_error: Option<String>,
     model_path: String,
     window_secs: f32,
     overlap_secs: f32,
@@ -241,6 +245,10 @@ impl Ui {
                     config_open: false,
                     config_prompts: Vec::new(),
                     config_default: 0,
+                    config_llm_model: String::new(),
+                    config_llm_models: Vec::new(),
+                    config_llm_models_loading: false,
+                    config_llm_models_error: None,
                     config_model_path: String::new(),
                     config_window_seconds: 3.0,
                     config_overlap_seconds: 0.25,
@@ -258,6 +266,7 @@ impl Ui {
                     active_prompt: 0,
                     snapshot_prompts: Vec::new(),
                     snapshot_default: 0,
+                    snapshot_llm_model: String::new(),
                     snapshot_transcriber: None,
                     snapshot_selected_input_device: None,
                     snapshot_global_hotkey: String::new(),
@@ -325,6 +334,10 @@ struct UiRuntime {
     config_open: bool,
     config_prompts: Vec<PromptEntry>,
     config_default: usize,
+    config_llm_model: String,
+    config_llm_models: Vec<String>,
+    config_llm_models_loading: bool,
+    config_llm_models_error: Option<String>,
     config_model_path: String,
     config_window_seconds: f32,
     config_overlap_seconds: f32,
@@ -344,6 +357,7 @@ struct UiRuntime {
     active_prompt: usize,
     snapshot_prompts: Vec<AgentPrompt>,
     snapshot_default: usize,
+    snapshot_llm_model: String,
     snapshot_transcriber: Option<TranscriberConfig>,
     snapshot_selected_input_device: Option<String>,
     snapshot_global_hotkey: String,
@@ -397,6 +411,8 @@ enum Message {
     AddPrompt,
     RemovePrompt(usize),
     SetDefaultPrompt(usize),
+    ConfigLlmModelSelected(String),
+    RequestLlmModels,
     PromptNameChanged(usize, String),
     PromptInstructionAction(usize, text_editor::Action),
     WindowSecondsChanged(f32),
@@ -586,7 +602,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 UiUpdate::RecordingFinished { file_size_bytes } => {
                     state.last_recording_file_size_bytes = file_size_bytes;
                 }
-                UiUpdate::AgentResponseReceived(text) => {
+                UiUpdate::LlmResponseReceived(text) => {
                     state.processed_text = Some(text.clone());
                     state.mode = AppMode::Idle;
                     state.replace_editor_text(text);
@@ -614,6 +630,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 UiUpdate::ConfigSnapshot {
                     agent_prompts,
                     default_prompt,
+                    llm_model,
                     transcriber,
                     selected_input_device,
                     global_hotkey,
@@ -626,11 +643,24 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                     }
                     state.snapshot_prompts = agent_prompts;
                     state.snapshot_default = default_prompt;
+                    state.snapshot_llm_model = llm_model.clone();
                     state.snapshot_transcriber = Some(transcriber);
                     state.snapshot_selected_input_device = selected_input_device;
                     state.snapshot_global_hotkey = global_hotkey;
                     state.config_api_key_status = api_key_status;
                     state.config_theme_mode = theme_mode;
+                    if !state.config_open {
+                        state.config_llm_model = llm_model;
+                    }
+                }
+                UiUpdate::LlmModelsLoaded(models) => {
+                    state.config_llm_models_loading = false;
+                    state.config_llm_models_error = None;
+                    state.config_llm_models = models;
+                }
+                UiUpdate::LlmModelsLoadFailed(message) => {
+                    state.config_llm_models_loading = false;
+                    state.config_llm_models_error = Some(message);
                 }
                 UiUpdate::ModelDownloadProgress(downloaded, total) => {
                     return self::update(state, Message::WizardDownloadProgress(downloaded, total));
@@ -732,6 +762,7 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 })
                 .collect();
             state.config_default = state.snapshot_default;
+            state.config_llm_model = state.snapshot_llm_model.clone();
             let tc = state.snapshot_transcriber.clone().unwrap_or_default();
             state.config_model_path = tc.model_path;
             state.config_window_seconds = tc.window_seconds;
@@ -746,6 +777,15 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             state.config_hotkey_listening = false;
             state.config_tab = ConfigTab::Setup;
             state.config_open = true;
+            state.config_llm_models_error = None;
+
+            if !matches!(state.config_api_key_status, ApiKeyStatus::NotSet)
+                && state.config_llm_models.is_empty()
+                && !state.config_llm_models_loading
+            {
+                state.config_llm_models_loading = true;
+                state.send_event(AppEventKind::UiRequestLlmModels);
+            }
 
             state.instruction_editors = state
                 .config_prompts
@@ -787,6 +827,14 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 default_prompt: default,
             });
 
+            if !state.config_llm_model.is_empty()
+                && state.config_llm_model != state.snapshot_llm_model
+            {
+                state.send_event(AppEventKind::UiUpdateLlmModel(
+                    state.config_llm_model.clone(),
+                ));
+            }
+
             state.send_event(AppEventKind::UiUpdateTranscriber(TranscriberConfig {
                 model_path: state.config_model_path.clone(),
                 window_seconds: state.config_window_seconds,
@@ -815,6 +863,18 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             }
 
             state.config_open = false;
+            Task::none()
+        }
+        Message::ConfigLlmModelSelected(model) => {
+            state.config_llm_model = model;
+            Task::none()
+        }
+        Message::RequestLlmModels => {
+            if !state.config_llm_models_loading {
+                state.config_llm_models_loading = true;
+                state.config_llm_models_error = None;
+                state.send_event(AppEventKind::UiRequestLlmModels);
+            }
             Task::none()
         }
         Message::AddPrompt => {
@@ -1635,6 +1695,10 @@ fn view(state: &UiRuntime) -> Element<'_, Message> {
         AppPhase::Main => {
             if state.config_open {
                 let setup_fields = SetupFields {
+                    llm_model: state.config_llm_model.clone(),
+                    llm_models: state.config_llm_models.clone(),
+                    llm_models_loading: state.config_llm_models_loading,
+                    llm_models_error: state.config_llm_models_error.clone(),
                     model_path: state.config_model_path.clone(),
                     window_secs: state.config_window_seconds,
                     overlap_secs: state.config_overlap_seconds,
@@ -2148,6 +2212,69 @@ fn view_setup_tab(
     .spacing(8)
     .padding(14);
 
+    // ── LLM card ────────────────────────────────────────────────────
+    let mut llm_models = sf.llm_models.clone();
+    if !sf.llm_model.is_empty() && !llm_models.iter().any(|model| model == &sf.llm_model) {
+        llm_models.push(sf.llm_model.clone());
+        llm_models.sort();
+    }
+
+    let llm_picker = pick_list(
+        llm_models,
+        (!sf.llm_model.is_empty()).then_some(sf.llm_model.clone()),
+        Message::ConfigLlmModelSelected,
+    )
+    .placeholder(if sf.llm_models_loading {
+        "Loading available models..."
+    } else {
+        "Select a model"
+    })
+    .style(styled_pick_list)
+    .menu_style(pick_list_menu)
+    .padding(10)
+    .width(Fill);
+
+    let llm_status = if let Some(error) = &sf.llm_models_error {
+        text(error.clone()).size(11).color(current_palette().red)
+    } else if sf.llm_models_loading {
+        text("Fetching models from the provider...")
+            .size(11)
+            .color(current_palette().muted)
+    } else if sf.llm_models.is_empty() {
+        text("Load models to choose from the current provider.")
+            .size(11)
+            .color(current_palette().muted)
+    } else {
+        text(format!("{} models available", sf.llm_models.len()))
+            .size(11)
+            .color(current_palette().muted)
+    };
+
+    let refresh_models_btn = button(
+        row![icon('\u{E5D5}', 16.0), text("Refresh Models").size(13)]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
+    )
+    .style(ghost_btn)
+    .padding([6, 14])
+    .on_press_maybe(
+        (!matches!(api_key_status, ApiKeyStatus::NotSet) && !sf.llm_models_loading)
+            .then_some(Message::RequestLlmModels),
+    );
+
+    let llm_card = column![
+        text("LLM").size(15).color(current_palette().text),
+        column![
+            text("Model").size(11).color(current_palette().muted),
+            llm_picker,
+            llm_status,
+            refresh_models_btn,
+        ]
+        .spacing(4),
+    ]
+    .spacing(10)
+    .padding(14);
+
     // ── Transcriber card ────────────────────────────────────────────
     let model_display = text(sf.model_path.clone())
         .size(12)
@@ -2306,6 +2433,7 @@ fn view_setup_tab(
     column![
         container(mic_card).style(surface_container).width(Fill),
         container(api_key_card).style(surface_container).width(Fill),
+        container(llm_card).style(surface_container).width(Fill),
         container(theme_card).style(surface_container).width(Fill),
         container(hotkey_card).style(surface_container).width(Fill),
         container(transcriber_card)

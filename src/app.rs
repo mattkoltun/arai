@@ -1,4 +1,3 @@
-use crate::agent::Agent;
 use crate::app_state::AppState;
 use crate::channels::{
     AppChannels, AppEventReceiver, AppEventSender, AudioChannels, UiUpdateSender,
@@ -6,7 +5,9 @@ use crate::channels::{
 use crate::config::{Config, ConfigError};
 use crate::controller::Controller;
 use crate::global_hotkey::HotkeyHandle;
+use crate::llm::LlmWorker;
 use crate::logger::{self, LogConfig};
+use crate::openai_connector::OpenAiConnector;
 use crate::recorder::Recorder;
 use crate::transcriber::Transcriber;
 use crate::ui::Ui;
@@ -42,12 +43,14 @@ struct ControllerRuntime {
 #[derive(Debug)]
 pub(crate) enum AppBuildError {
     Config(ConfigError),
+    LlmConnector(crate::llm::LlmError),
 }
 
 impl Display for AppBuildError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Config(err) => write!(f, "Config error: {err}"),
+            Self::LlmConnector(err) => write!(f, "LLM connector error: {err}"),
         }
     }
 }
@@ -57,6 +60,12 @@ impl std::error::Error for AppBuildError {}
 impl From<ConfigError> for AppBuildError {
     fn from(err: ConfigError) -> Self {
         Self::Config(err)
+    }
+}
+
+impl From<crate::llm::LlmError> for AppBuildError {
+    fn from(err: crate::llm::LlmError) -> Self {
+        Self::LlmConnector(err)
     }
 }
 
@@ -137,9 +146,9 @@ impl App {
     }
 
     fn spawn_controller(runtime: ControllerRuntime) -> JoinHandle<()> {
-        thread::spawn(move || {
-            let controller = build_controller(runtime);
-            controller.run();
+        thread::spawn(move || match build_controller(runtime) {
+            Ok(controller) => controller.run(),
+            Err(err) => log::error!("Failed to build controller runtime: {err}"),
         })
     }
 }
@@ -167,7 +176,7 @@ impl LoadedConfig {
     }
 }
 
-fn build_controller(runtime: ControllerRuntime) -> Controller {
+fn build_controller(runtime: ControllerRuntime) -> Result<Controller, AppBuildError> {
     let ControllerRuntime {
         config,
         model_exists,
@@ -184,17 +193,18 @@ fn build_controller(runtime: ControllerRuntime) -> Controller {
     if model_exists && let Err(err) = transcriber.start() {
         log::error!("Transcriber failed to start: {err}");
     }
-    let agent = Agent::new(app_event_tx.clone(), config.open_api_key.clone());
+    let connector = OpenAiConnector::new(config.open_api_key.clone())?;
+    let llm_worker = LlmWorker::new(app_event_tx.clone(), Box::new(connector));
     let app_state = AppState::new(config);
 
-    Controller::new(
+    Ok(Controller::new(
         recorder,
         transcriber,
         app_event_tx,
         app_event_rx,
-        agent,
+        llm_worker,
         app_state,
         ui_update_tx,
         shutdown_flag,
-    )
+    ))
 }

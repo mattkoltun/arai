@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 pub struct AppStateSnapshot {
     pub agent_prompts: Vec<AgentPrompt>,
     pub default_prompt: usize,
+    pub llm_model: String,
     pub transcriber: TranscriberConfig,
     pub input_device: Option<String>,
     pub global_hotkey: String,
@@ -59,6 +60,7 @@ impl AppState {
         AppStateSnapshot {
             agent_prompts: config.agent_prompts.clone(),
             default_prompt: config.default_prompt,
+            llm_model: config.llm_model.clone(),
             transcriber: config.transcriber.clone(),
             input_device: config.input_device.clone(),
             global_hotkey: config.global_hotkey.clone(),
@@ -109,6 +111,14 @@ impl AppState {
         }
     }
 
+    pub fn update_llm_model(&self, model: String) {
+        let mut config = self.inner.lock().expect("app_state mutex poisoned");
+        config.llm_model = model;
+        if let Err(e) = config.save() {
+            log::error!("Failed to save config: {e}");
+        }
+    }
+
     /// Updates the runtime API key. Does NOT save to config file —
     /// the key is persisted via keyring, not YAML.
     #[allow(dead_code)]
@@ -121,6 +131,11 @@ impl AppState {
     pub fn transcriber_config(&self) -> TranscriberConfig {
         let config = self.inner.lock().expect("app_state mutex poisoned");
         config.transcriber.clone()
+    }
+
+    pub fn llm_model(&self) -> String {
+        let config = self.inner.lock().expect("app_state mutex poisoned");
+        config.llm_model.clone()
     }
 }
 
@@ -142,6 +157,7 @@ mod tests {
             global_hotkey: "Alt+Space".to_string(),
             input_device: None,
             theme_mode: ThemeMode::default(),
+            llm_model: "gpt-4o-mini".to_string(),
         }
     }
 
