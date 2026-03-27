@@ -292,6 +292,12 @@ impl Recorder {
     }
 }
 
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 /// Returns the equivalent 16-bit PCM WAV size for a sample buffer.
 fn wav_size_bytes(samples: &[i16]) -> u64 {
     44 + (samples.len() as u64 * 2)

@@ -13,6 +13,8 @@ The format is based on Keep a Changelog and uses an `Unreleased` section that sh
 
 ### Fixed
 - Fixed editor undo/redo history so transcription, reconciliation, and agent-response updates use the same text mutation path as manual edits.
+- Fixed macOS quit handling so `Cmd+Q` requests an orderly shutdown of the UI and background workers instead of relying on abrupt process termination.
+- Fixed a macOS shutdown crash by routing the native Quit menu away from AppKit `terminate:` and stopping the app loop directly before ggml Metal finalizers can abort.
 
 ## [0.18.0] - 2026-03-25
 

@@ -128,6 +128,7 @@ impl Transcriber {
 /// Joins the worker thread on drop to ensure clean shutdown.
 impl Drop for Transcriber {
     fn drop(&mut self) {
+        self.stop();
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
