@@ -31,13 +31,5 @@ fn main() {
         }
     };
 
-    #[cfg(target_os = "macos")]
-    {
-        // Work around a ggml Metal teardown assert that can fire during the
-        // process-wide C atexit phase even after Arai has shut down cleanly.
-        unsafe { libc::_exit(exit_code) };
-    }
-
-    #[cfg(not(target_os = "macos"))]
     std::process::exit(exit_code);
 }

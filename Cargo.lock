@@ -134,7 +134,6 @@ dependencies = [
  "global-hotkey",
  "iced",
  "keyring",
- "libc",
  "log",
  "objc2 0.6.3",
  "objc2-app-kit 0.3.2",
