@@ -173,6 +173,10 @@ enum AppPhase {
 
 const MAX_PROMPTS: usize = 10;
 
+fn main_editor_id() -> iced::widget::Id {
+    iced::widget::Id::new("main-editor")
+}
+
 struct SetupFields {
     llm_model: String,
     llm_models: Vec<String>,
@@ -454,6 +458,9 @@ enum Message {
     Shutdown,
     CloseRequested,
     KeyPressed(keyboard::Key, keyboard::Modifiers),
+    ToggleMainEditorFocus,
+    MainEditorFocusLoaded(bool),
+    ClearEditor,
     WindowOpened(window::Id),
     DragWindow,
 }
@@ -497,6 +504,13 @@ impl UiRuntime {
                 .perform(text_editor::Action::Edit(text_editor::Edit::Insert(ch)));
         }
         self.input.push_str(delta);
+    }
+
+    fn can_toggle_main_editor_focus(&self) -> bool {
+        self.phase == AppPhase::Main
+            && !self.config_open
+            && !self.history_open
+            && !self.showing_error_detail
     }
 
     fn toggle_listen(&mut self) {
@@ -1170,6 +1184,25 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 Task::none()
             }
         }
+        Message::ToggleMainEditorFocus => {
+            if !state.can_toggle_main_editor_focus() {
+                return Task::none();
+            }
+
+            iced::widget::operation::is_focused(main_editor_id())
+                .map(Message::MainEditorFocusLoaded)
+        }
+        Message::MainEditorFocusLoaded(is_focused) => {
+            if is_focused {
+                iced::widget::operation::focus_next()
+            } else {
+                iced::widget::operation::focus(main_editor_id())
+            }
+        }
+        Message::ClearEditor => {
+            state.replace_editor_text(String::new());
+            Task::none()
+        }
         Message::WindowOpened(id) => {
             state.window_id = Some(id);
             match load_window_icon() {
@@ -1187,6 +1220,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 return Task::none();
             }
             match key {
+                keyboard::Key::Named(keyboard::key::Named::Tab) if modifiers.is_empty() => {
+                    update(state, Message::ToggleMainEditorFocus)
+                }
                 keyboard::Key::Named(keyboard::key::Named::Enter) if modifiers.control() => {
                     update(state, Message::Copy)
                 }
@@ -1196,6 +1232,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 }
                 keyboard::Key::Character(ref c) if c.as_str() == "c" && modifiers.command() => {
                     update(state, Message::Copy)
+                }
+                keyboard::Key::Character(ref c) if c.as_str() == "e" && modifiers.command() => {
+                    update(state, Message::ClearEditor)
                 }
                 keyboard::Key::Character(ref c)
                     if c.as_str() == "z" && modifiers.command() && modifiers.shift() =>
@@ -1758,11 +1797,15 @@ fn view_main<'a>(
             .width(Fill);
 
     let mut editor_widget = text_editor(&state.editor)
+        .id(main_editor_id())
         .style(borderless_editor)
         .wrapping(text::Wrapping::Word)
         .padding(16)
         .height(Fill)
         .key_binding(|key_press| match &key_press.key {
+            keyboard::Key::Named(keyboard::key::Named::Tab) if key_press.modifiers.is_empty() => {
+                Some(text_editor::Binding::Custom(Message::ToggleMainEditorFocus))
+            }
             keyboard::Key::Named(keyboard::key::Named::Enter) if key_press.modifiers.control() => {
                 Some(text_editor::Binding::Custom(Message::Copy))
             }
@@ -1781,6 +1824,9 @@ fn view_main<'a>(
             }
             keyboard::Key::Character(c) if c.as_str() == "c" && key_press.modifiers.command() => {
                 Some(text_editor::Binding::Custom(Message::Copy))
+            }
+            keyboard::Key::Character(c) if c.as_str() == "e" && key_press.modifiers.command() => {
+                Some(text_editor::Binding::Custom(Message::ClearEditor))
             }
             _ => text_editor::Binding::from_key_press(key_press),
         });

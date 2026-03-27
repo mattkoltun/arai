@@ -131,10 +131,12 @@ Models are downloaded from Hugging Face and stored in `~/.local/share/arai/model
 | `Enter` | Submit text for transformation |
 | `Ctrl+Enter` | Copy result to clipboard |
 | `Cmd+C` | Copy result to clipboard |
+| `Cmd+E` | Clear the editor |
 | `Cmd+Z` | Undo |
 | `Cmd+Shift+Z` | Redo |
 | `Cmd+W` | Hide window |
 | `Cmd+1` through `Cmd+9` | Switch to instruction 1-9 |
+| `Tab` | Toggle focus on the main editor |
 | `Shift+Enter` | Insert newline in editor |
 | `Escape` | Close settings panel / cancel hotkey capture |
 
