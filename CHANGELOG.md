@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and uses an `Unreleased` section that sh
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-03-28
+
 ### Changed
 - Simplified app icon assets to use `logo.png` for the runtime window icon and `logo.icns` for macOS bundling, removing redundant icon source files.
 - Refactored the OpenAI text-processing path into a generic `LlmWorker` plus connector interface, with a concrete `OpenAiConnector` and support for listing provider models.
