@@ -17,15 +17,19 @@ mod transcriber;
 mod ui;
 
 fn main() {
-    let app = match app::App::build() {
-        Ok(app) => app,
+    let exit_code = match app::App::build() {
+        Ok(app) => match app.run() {
+            Ok(()) => 0,
+            Err(err) => {
+                eprintln!("{err}");
+                1
+            }
+        },
         Err(err) => {
             eprintln!("{err}");
-            return;
+            1
         }
     };
 
-    if let Err(err) = app.run() {
-        eprintln!("{err}");
-    }
+    std::process::exit(exit_code);
 }

@@ -98,6 +98,16 @@ impl Controller {
         let _ = self.ui_update_tx.send(UiUpdate::LlmResponseReceived(text));
     }
 
+    fn shutdown(&mut self) {
+        if self.shutting_down.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        info!("Controller shutdown requested");
+        self.transcriber.stop();
+        self.recorder.stop_signal();
+    }
+
     fn submit_text(&self, instruction: String, text: String) {
         debug!(
             "Controller submitting text to LLM with instruction: {}",
@@ -308,7 +318,7 @@ impl Controller {
                     self.llm_worker.list_models();
                 }
                 (AppEventSource::Ui, AppEventKind::UiShutdown) => {
-                    self.shutting_down.store(true, Ordering::SeqCst);
+                    self.shutdown();
                 }
                 (
                     AppEventSource::Ui,

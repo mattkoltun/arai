@@ -19,10 +19,61 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::{MainThreadOnly, define_class, msg_send, sel};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSApplication;
+#[cfg(target_os = "macos")]
+use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol};
+
+#[cfg(target_os = "macos")]
+std::thread_local! {
+    static SAFE_QUIT_TARGET: std::cell::RefCell<Option<Retained<SafeQuitTarget>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+define_class!(
+    #[derive(Debug)]
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AraiSafeQuitTarget"]
+    struct SafeQuitTarget;
+
+    impl SafeQuitTarget {
+        #[unsafe(method(safeQuit:))]
+        fn safe_quit(&self, _sender: Option<&objc2::runtime::AnyObject>) {
+            stop_app_immediately();
+        }
+    }
+
+    unsafe impl NSObjectProtocol for SafeQuitTarget {}
+);
+
+#[cfg(target_os = "macos")]
+impl SafeQuitTarget {
+    fn shared() -> Retained<Self> {
+        SAFE_QUIT_TARGET.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            if let Some(target) = slot.as_ref() {
+                return target.clone();
+            }
+
+            let mtm =
+                MainThreadMarker::new().expect("safe quit target must be created on main thread");
+            let target: Retained<Self> =
+                unsafe { msg_send![super(mtm.alloc().set_ivars(())), init] };
+            *slot = Some(target.clone());
+            target
+        })
+    }
+}
+
 /// Hides the application and returns focus to the previously active app.
 #[cfg(target_os = "macos")]
 fn hide_app() {
-    use objc2_app_kit::NSApplication;
     // Safety: iced runs the UI on the main thread.
     let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
     let app = NSApplication::sharedApplication(mtm);
@@ -32,13 +83,76 @@ fn hide_app() {
 /// Un-hides the application and brings it to the front.
 #[cfg(target_os = "macos")]
 fn show_app() {
-    use objc2_app_kit::NSApplication;
     // Safety: iced runs the UI on the main thread.
     let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
     let app = NSApplication::sharedApplication(mtm);
     app.unhide(None);
     #[allow(deprecated)]
     app.activateIgnoringOtherApps(true);
+}
+
+/// Posts a synthetic event after stopping AppKit so the main loop exits
+/// immediately instead of waiting for another user event.
+#[cfg(target_os = "macos")]
+fn stop_app_immediately() {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventSubtype, NSEventType};
+    use objc2_foundation::NSPoint;
+
+    // Safety: iced runs the UI on the main thread.
+    let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+    let app = NSApplication::sharedApplication(mtm);
+    app.stop(None);
+
+    if let Some(event) =
+        NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+            NSEventType::ApplicationDefined,
+            NSPoint::new(0.0, 0.0),
+            NSEventModifierFlags(0),
+            0.0,
+            0,
+            None,
+            NSEventSubtype::WindowExposed.0,
+            0,
+            0,
+        )
+    {
+        app.postEvent_atStart(&event, true);
+    }
+}
+
+/// Rebinds the default macOS Quit menu item away from `terminate:` so Cmd+Q
+/// does not enter Cocoa's normal termination path.
+#[cfg(target_os = "macos")]
+fn install_safe_quit_menu_item() {
+    // Safety: iced runs the UI on the main thread.
+    let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+    let app = NSApplication::sharedApplication(mtm);
+
+    let Some(main_menu) = app.mainMenu() else {
+        return;
+    };
+    let Some(app_menu_root) = main_menu.itemAtIndex(0) else {
+        return;
+    };
+    let Some(app_menu) = app_menu_root.submenu() else {
+        return;
+    };
+
+    for index in 0..app_menu.numberOfItems() {
+        let Some(item) = app_menu.itemAtIndex(index) else {
+            continue;
+        };
+
+        if item.action() == Some(sel!(terminate:)) {
+            let target = SafeQuitTarget::shared();
+            // Safety: `safeQuit:` is implemented by `SafeQuitTarget`.
+            unsafe {
+                item.setTarget(Some(target.as_ref()));
+                item.setAction(Some(sel!(safeQuit:)));
+            }
+            break;
+        }
+    }
 }
 
 /// Resolves the active palette from the current theme mode.
@@ -994,7 +1108,15 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::Shutdown | Message::CloseRequested => {
             state.send_event(AppEventKind::UiShutdown);
-            iced::exit()
+            #[cfg(target_os = "macos")]
+            {
+                stop_app_immediately();
+                Task::none()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                iced::exit()
+            }
         }
         Message::SwitchConfigTab(tab) => {
             state.config_tab = tab;
@@ -1205,6 +1327,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
         }
         Message::WindowOpened(id) => {
             state.window_id = Some(id);
+            #[cfg(target_os = "macos")]
+            install_safe_quit_menu_item();
+
             match load_window_icon() {
                 Some(icon) => window::set_icon(id, icon),
                 None => Task::none(),
@@ -1235,6 +1360,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 }
                 keyboard::Key::Character(ref c) if c.as_str() == "e" && modifiers.command() => {
                     update(state, Message::ClearEditor)
+                }
+                keyboard::Key::Character(ref c) if c.as_str() == "q" && modifiers.command() => {
+                    update(state, Message::Shutdown)
                 }
                 keyboard::Key::Character(ref c)
                     if c.as_str() == "z" && modifiers.command() && modifiers.shift() =>
