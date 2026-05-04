@@ -1318,6 +1318,9 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
             if is_focused {
                 iced::widget::operation::focus_next()
             } else {
+                state
+                    .editor
+                    .perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
                 iced::widget::operation::focus(main_editor_id())
             }
         }
