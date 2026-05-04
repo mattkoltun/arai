@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/mattkoltun/arai/actions/workflows/rust.yml/badge.svg)](https://github.com/mattkoltun/arai/actions/workflows/rust.yml)
 [![Release](https://github.com/mattkoltun/arai/actions/workflows/release.yml/badge.svg)](https://github.com/mattkoltun/arai/actions/workflows/release.yml)
-![Platform: macOS](https://img.shields.io/badge/platform-macOS-blue)
+![Platform: macOS + Linux](https://img.shields.io/badge/platform-macOS%20%2B%20Linux-blue)
 
 Arai is a voice-first prompt and writing assistant built for power users who want to speed up their workflows. It captures microphone audio, transcribes it locally via Whisper, then transforms the text through OpenAI's API. The result is polished text ready for use in agent prompts, emails, messages, and more.
 
@@ -13,6 +13,8 @@ Arai is a voice-first prompt and writing assistant built for power users who wan
 ### From GitHub Releases
 
 Download the latest release from the [Releases](https://github.com/mattkoltun/arai/releases) page. On macOS, drag `Arai.app` to your Applications folder.
+
+Arai currently supports macOS and Linux. Linux is supported, though macOS remains the primary tested desktop target.
 
 ### From Homebrew
 
@@ -96,10 +98,10 @@ transcriber:
 
 ### API Key Storage
 
-Arai stores the OpenAI API key in the macOS Keychain via the system keyring. If a key is found in the config file, it is automatically migrated to the keyring and removed from the file. Priority order:
+Arai stores the OpenAI API key in the OS credential store via the system keyring. If a key is found in the config file, it is automatically migrated to the keyring and removed from the file. Priority order:
 
 1. `OPENAI_API_KEY` environment variable
-2. macOS Keychain (service: `arai`, account: `openai_api_key`)
+2. OS credential store (macOS Keychain or Linux Secret Service; service: `arai`, account: `openai_api_key`)
 3. Config file value (migration fallback)
 
 ### Whisper Models
