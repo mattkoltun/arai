@@ -72,14 +72,17 @@ jobs:
       - name: Update Cargo.toml version
         run: sed -i '' 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Update Cargo.lock version
+        run: cargo generate-lockfile
+
       - name: Finalize changelog
         run: |
           DATE=$(date +%Y-%m-%d)
           sed -i '' "s/^## \[Unreleased\]/## [Unreleased]\n\n## [${{ inputs.version }}] - $DATE/" CHANGELOG.md
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install system dependencies
         run: brew install cmake create-dmg
@@ -173,7 +176,7 @@ jobs:
         run: |
           git config user.name "mkoltun-bot"
           git config user.email "mkoltun-bot@users.noreply.github.com"
-          git add Cargo.toml CHANGELOG.md
+          git add Cargo.toml Cargo.lock CHANGELOG.md
           git commit -m "chore: release v${{ inputs.version }}"
           git push origin HEAD:main
 
