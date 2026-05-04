@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and uses an `Unreleased` section that sh
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-05-04
+
 ### Fixed
 - Fixed `Tab` focusing the main editor so the cursor lands at the end of the current text.
 
