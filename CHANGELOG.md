@@ -13,6 +13,8 @@ The format is based on Keep a Changelog and uses an `Unreleased` section that sh
 ### Changed
 
 - Replaced periodic global hotkey polling with event-driven delivery to the UI.
+- Stopped high-frequency UI animation updates while the app is idle or otherwise
+  not displaying the processing pulse.
 
 ## [0.19.1] - 2026-05-04
 

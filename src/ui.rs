@@ -274,6 +274,12 @@ enum AppMode {
     Processing,
 }
 
+impl AppMode {
+    fn is_animated(&self) -> bool {
+        matches!(self, Self::Reconciling | Self::Processing)
+    }
+}
+
 /// Controls whether the app shows the setup wizard or the main UI.
 #[derive(Clone, Debug, Default, PartialEq)]
 enum AppPhase {
@@ -518,7 +524,7 @@ struct UiRuntime {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Tick,
+    AnimationTick,
     GlobalHotkeyEvent(GlobalHotKeyEvent),
     UiUpdateReceived(UiUpdate),
     EditorAction(text_editor::Action),
@@ -629,6 +635,13 @@ impl UiRuntime {
             && !self.showing_error_detail
     }
 
+    fn set_mode(&mut self, mode: AppMode) {
+        if self.mode.is_animated() && !mode.is_animated() {
+            self.pulse_phase = 0.0;
+        }
+        self.mode = mode;
+    }
+
     fn toggle_listen(&mut self) {
         if self.mode == AppMode::Processing || self.mode == AppMode::Reconciling {
             return;
@@ -636,7 +649,7 @@ impl UiRuntime {
         if self.mode == AppMode::Listening {
             debug!("UI stopping listen");
             self.send_event(AppEventKind::UiStopListening);
-            self.mode = AppMode::Reconciling;
+            self.set_mode(AppMode::Reconciling);
             self.status_line = "Reconciling...".to_string();
             if let Some(started_at) = self.recording_started_at.take() {
                 self.last_recording_duration = started_at.elapsed();
@@ -645,7 +658,7 @@ impl UiRuntime {
         } else {
             debug!("UI starting listen");
             self.send_event(AppEventKind::UiStartListening(self.input.clone()));
-            self.mode = AppMode::Listening;
+            self.set_mode(AppMode::Listening);
             self.status_line = "Listening...".to_string();
             self.recording_started_at = Some(Instant::now());
             self.last_recording_duration = Duration::ZERO;
@@ -667,7 +680,7 @@ impl UiRuntime {
             .get(self.active_prompt)
             .map(|p| p.instruction.clone())
             .unwrap_or_default();
-        self.mode = AppMode::Processing;
+        self.set_mode(AppMode::Processing);
         self.processed_text = None;
         self.status_line = "Processing...".to_string();
         debug!("UI submit requested");
@@ -680,12 +693,10 @@ impl UiRuntime {
 
 fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
     match message {
-        Message::Tick => {
+        Message::AnimationTick => {
             // Advance pulse animation while processing or reconciling (~2.4 Hz cycle at 16ms ticks).
-            if matches!(state.mode, AppMode::Processing | AppMode::Reconciling) {
+            if state.mode.is_animated() {
                 state.pulse_phase += 0.15;
-            } else {
-                state.pulse_phase = 0.0;
             }
 
             Task::none()
@@ -733,27 +744,27 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 }
                 UiUpdate::LlmResponseReceived(text) => {
                     state.processed_text = Some(text.clone());
-                    state.mode = AppMode::Idle;
+                    state.set_mode(AppMode::Idle);
                     state.replace_editor_text(text);
                     state.status_line = "Ready".to_string();
                 }
                 UiUpdate::ProcessingFailed(message) => {
                     log::error!("Processing failed: {message}");
-                    state.mode = AppMode::Idle;
+                    state.set_mode(AppMode::Idle);
                     state.status_line = "Error — try again".to_string();
                 }
                 UiUpdate::ErrorOccurred(error_info) => {
                     state.last_error = Some(error_info);
                 }
                 UiUpdate::ReconciliationStarted => {
-                    state.mode = AppMode::Reconciling;
+                    state.set_mode(AppMode::Reconciling);
                     state.status_line = "Reconciling...".to_string();
                 }
                 UiUpdate::ReconciliationComplete(text) => {
                     if !text.is_empty() {
                         state.replace_editor_text(text);
                     }
-                    state.mode = AppMode::Idle;
+                    state.set_mode(AppMode::Idle);
                     state.status_line = "Ready".to_string();
                 }
                 UiUpdate::ConfigSnapshot {
@@ -2770,18 +2781,20 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
 fn subscription(state: &UiRuntime) -> Subscription<Message> {
     let ui_update_rx = state.ui_update_rx.clone();
     let mut subs = vec![
-        time::every(Duration::from_millis(16)).map(|_| Message::Tick),
         keyboard::listen().map(|event| match event {
             keyboard::Event::KeyPressed { key, modifiers, .. } => {
                 Message::KeyPressed(key, modifiers)
             }
-            _ => Message::Tick,
+            _ => Message::AnimationTick,
         }),
         window::open_events().map(Message::WindowOpened),
         window::close_requests().map(|_| Message::CloseRequested),
         Subscription::run(global_hotkey_event_stream),
         Subscription::run_with(UiUpdateBridge(ui_update_rx), ui_update_stream),
     ];
+    if state.mode.is_animated() {
+        subs.push(time::every(Duration::from_millis(16)).map(|_| Message::AnimationTick));
+    }
     if state.config_theme_mode == ThemeMode::System {
         subs.push(time::every(Duration::from_secs(5)).map(|_| Message::CheckSystemAppearance));
     }
@@ -2850,4 +2863,17 @@ fn theme(state: &UiRuntime) -> Theme {
     let p = active_palette(&state.config_theme_mode, state.system_dark);
     PALETTE.with(|cell| cell.set(p));
     p.iced_theme()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppMode;
+
+    #[test]
+    fn animates_only_processing_and_reconciling_modes() {
+        assert!(AppMode::Processing.is_animated());
+        assert!(AppMode::Reconciling.is_animated());
+        assert!(!AppMode::Idle.is_animated());
+        assert!(!AppMode::Listening.is_animated());
+    }
 }
