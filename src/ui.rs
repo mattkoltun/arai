@@ -2781,11 +2781,11 @@ fn view_advanced_tab(state: &UiRuntime) -> Column<'_, Message> {
 fn subscription(state: &UiRuntime) -> Subscription<Message> {
     let ui_update_rx = state.ui_update_rx.clone();
     let mut subs = vec![
-        keyboard::listen().map(|event| match event {
+        keyboard::listen().filter_map(|event| match event {
             keyboard::Event::KeyPressed { key, modifiers, .. } => {
-                Message::KeyPressed(key, modifiers)
+                Some(Message::KeyPressed(key, modifiers))
             }
-            _ => Message::AnimationTick,
+            _ => None,
         }),
         window::open_events().map(Message::WindowOpened),
         window::close_requests().map(|_| Message::CloseRequested),
