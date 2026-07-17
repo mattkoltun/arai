@@ -5,6 +5,7 @@ use crate::history::HistoryRecord;
 use crate::messages::{ApiKeyStatus, AppEvent, AppEventKind, AppEventSource, ErrorInfo, UiUpdate};
 use crate::theme::{self, AppPalette};
 use futures::SinkExt;
+use global_hotkey::GlobalHotKeyEvent;
 use iced::font::Family;
 use iced::widget::{
     Column, button, column, container, pick_list, row, scrollable, slider, text, text_editor,
@@ -518,6 +519,7 @@ struct UiRuntime {
 #[derive(Debug, Clone)]
 enum Message {
     Tick,
+    GlobalHotkeyEvent(GlobalHotKeyEvent),
     UiUpdateReceived(UiUpdate),
     EditorAction(text_editor::Action),
     ToggleListen,
@@ -679,16 +681,6 @@ impl UiRuntime {
 fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
     match message {
         Message::Tick => {
-            // Poll global hotkey — toggle listen and focus window on press.
-            let hotkey_fired = if let Some(ref handle) = state.hotkey_handle
-                && handle.lock().unwrap().poll_event()
-            {
-                state.toggle_listen();
-                true
-            } else {
-                false
-            };
-
             // Advance pulse animation while processing or reconciling (~2.4 Hz cycle at 16ms ticks).
             if matches!(state.mode, AppMode::Processing | AppMode::Reconciling) {
                 state.pulse_phase += 0.15;
@@ -696,7 +688,16 @@ fn update(state: &mut UiRuntime, message: Message) -> Task<Message> {
                 state.pulse_phase = 0.0;
             }
 
-            if hotkey_fired {
+            Task::none()
+        }
+        Message::GlobalHotkeyEvent(event) => {
+            let is_registered_press = state
+                .hotkey_handle
+                .as_ref()
+                .is_some_and(|handle| handle.lock().unwrap().matches_press(&event));
+
+            if is_registered_press {
+                state.toggle_listen();
                 #[cfg(target_os = "macos")]
                 show_app();
                 if let Some(id) = state.window_id {
@@ -2778,12 +2779,33 @@ fn subscription(state: &UiRuntime) -> Subscription<Message> {
         }),
         window::open_events().map(Message::WindowOpened),
         window::close_requests().map(|_| Message::CloseRequested),
+        Subscription::run(global_hotkey_event_stream),
         Subscription::run_with(UiUpdateBridge(ui_update_rx), ui_update_stream),
     ];
     if state.config_theme_mode == ThemeMode::System {
         subs.push(time::every(Duration::from_secs(5)).map(|_| Message::CheckSystemAppearance));
     }
     Subscription::batch(subs)
+}
+
+fn global_hotkey_event_stream() -> std::pin::Pin<Box<dyn futures::Stream<Item = Message> + Send>> {
+    let receiver = GlobalHotKeyEvent::receiver().clone();
+    Box::pin(iced::stream::channel(
+        10,
+        move |mut sender: futures::channel::mpsc::Sender<Message>| async move {
+            std::thread::spawn(move || {
+                while let Ok(event) = receiver.recv() {
+                    if futures::executor::block_on(sender.send(Message::GlobalHotkeyEvent(event)))
+                        .is_err()
+                    {
+                        log::warn!("Global hotkey channel closed, bridge exiting");
+                        break;
+                    }
+                }
+            });
+            std::future::pending::<()>().await;
+        },
+    ))
 }
 
 struct UiUpdateBridge(Arc<Mutex<Option<UiUpdateReceiver>>>);

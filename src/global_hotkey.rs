@@ -4,8 +4,8 @@ use log::{error, info, warn};
 
 /// Wraps the `global-hotkey` crate to register a single system-wide hotkey
 /// for toggling transcription. The manager must be created on the main thread
-/// (macOS requirement). Events are polled via [`poll_event`] from an iced
-/// subscription tick.
+/// (macOS requirement). An iced subscription delivers events to
+/// [`matches_press`](Self::matches_press).
 pub struct HotkeyHandle {
     manager: GlobalHotKeyManager,
     hotkey_id: u32,
@@ -79,15 +79,47 @@ impl HotkeyHandle {
         true
     }
 
-    /// Returns `true` if the registered hotkey was pressed since the last poll.
-    /// Call this from the iced tick subscription.
-    pub fn poll_event(&self) -> bool {
-        let receiver = GlobalHotKeyEvent::receiver();
-        while let Ok(event) = receiver.try_recv() {
-            if event.id == self.hotkey_id && event.state == HotKeyState::Pressed {
-                return true;
-            }
-        }
-        false
+    /// Returns `true` when `event` is a press of the currently registered hotkey.
+    pub fn matches_press(&self, event: &GlobalHotKeyEvent) -> bool {
+        is_matching_press(self.hotkey_id, event)
+    }
+}
+
+fn is_matching_press(hotkey_id: u32, event: &GlobalHotKeyEvent) -> bool {
+    event.id == hotkey_id && event.state == HotKeyState::Pressed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_matching_pressed_event() {
+        let event = GlobalHotKeyEvent {
+            id: 42,
+            state: HotKeyState::Pressed,
+        };
+
+        assert!(is_matching_press(42, &event));
+    }
+
+    #[test]
+    fn rejects_matching_released_event() {
+        let event = GlobalHotKeyEvent {
+            id: 42,
+            state: HotKeyState::Released,
+        };
+
+        assert!(!is_matching_press(42, &event));
+    }
+
+    #[test]
+    fn rejects_pressed_event_for_different_hotkey() {
+        let event = GlobalHotKeyEvent {
+            id: 7,
+            state: HotKeyState::Pressed,
+        };
+
+        assert!(!is_matching_press(42, &event));
     }
 }
