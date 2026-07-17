@@ -2475,7 +2475,7 @@ fn view_setup_tab(
     .spacing(4);
 
     let window_secs_slider = row![
-        slider(1.0..=10.0, sf.window_secs, Message::WindowSecondsChanged).step(0.5),
+        slider(1.0..=10.0, sf.window_secs, Message::WindowSecondsChanged).step(0.5_f32),
         text(format!("{:.1}", sf.window_secs))
             .size(12)
             .color(current_palette().text)
@@ -2485,7 +2485,7 @@ fn view_setup_tab(
     .align_y(iced::Alignment::Center);
 
     let overlap_secs_slider = row![
-        slider(0.0..=2.0, sf.overlap_secs, Message::OverlapSecondsChanged).step(0.05),
+        slider(0.0..=2.0, sf.overlap_secs, Message::OverlapSecondsChanged).step(0.05_f32),
         text(format!("{:.2}", sf.overlap_secs))
             .size(12)
             .color(current_palette().text)
@@ -2500,7 +2500,7 @@ fn view_setup_tab(
             sf.silence_thresh,
             Message::SilenceThresholdChanged
         )
-        .step(0.001),
+        .step(0.001_f32),
         text(format!("{:.3}", sf.silence_thresh))
             .size(12)
             .color(current_palette().text)

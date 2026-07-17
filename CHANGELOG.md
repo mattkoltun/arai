@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and uses an `Unreleased` section that sh
 
 ## [Unreleased]
 
+### Fixed
+- Fixed newer Rust CI builds by making transcriber slider step values explicitly `f32`.
+
 ## [0.19.1] - 2026-05-04
 
 ### Fixed
